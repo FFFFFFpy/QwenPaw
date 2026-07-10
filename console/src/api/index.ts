@@ -28,6 +28,7 @@ import { languageApi } from "./modules/language";
 import { backupApi } from "./modules/backup";
 import { consoleApi } from "./modules/console";
 import { accessControlApi } from "./modules/accessControl";
+import { codexSubscriptionApi } from "./modules/codexSubscription";
 
 export const api = {
   // Root
@@ -99,9 +100,13 @@ export const api = {
 
   // Access Control
   ...accessControlApi,
+
+  // OpenAI Codex subscription
+  ...codexSubscriptionApi,
 };
 
 export default api;
 
 // Export individual APIs for direct access
 export { agentsApi };
+export { codexSubscriptionApi };

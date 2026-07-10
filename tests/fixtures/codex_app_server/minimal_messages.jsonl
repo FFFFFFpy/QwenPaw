@@ -1,0 +1,11 @@
+{"id":1,"method":"initialize","params":{"clientInfo":{"name":"qwenpaw","title":"QwenPaw","version":"2.0.0"},"capabilities":{"experimentalApi":true,"requestAttestation":false}}}
+{"id":1,"result":{"userAgent":"codex-test","codexHome":"/tmp/codex-home","platformFamily":"unix","platformOs":"linux"}}
+{"method":"initialized","params":{}}
+{"id":2,"method":"model/list","params":{"limit":100,"includeHidden":false}}
+{"id":2,"result":{"data":[{"id":"codex-test","model":"codex-test","upgrade":null,"upgradeInfo":null,"availabilityNux":null,"displayName":"Codex Test","description":"Fixture model","hidden":false,"supportedReasoningEfforts":[{"reasoningEffort":"medium","description":"Default"}],"defaultReasoningEffort":"medium","inputModalities":["text","image"],"supportsPersonality":false,"additionalSpeedTiers":[],"serviceTiers":[],"defaultServiceTier":null,"isDefault":true}],"nextCursor":null}}
+{"id":3,"method":"thread/start","params":{"model":"codex-test","cwd":"/tmp/qwenpaw-codex","approvalPolicy":"never","sandbox":"read-only","ephemeral":true}}
+{"id":3,"result":{"thread":{"id":"thread-1"},"model":"codex-test","modelProvider":"openai","serviceTier":null,"cwd":"/tmp/qwenpaw-codex","runtimeWorkspaceRoots":[],"instructionSources":[],"approvalPolicy":"never","approvalsReviewer":"user","sandbox":{"type":"readOnly"},"activePermissionProfile":null,"reasoningEffort":"medium","multiAgentMode":"explicitRequestOnly"}}
+{"id":4,"method":"turn/start","params":{"threadId":"thread-1","input":[{"type":"text","text":"hello","text_elements":[]}]}}
+{"id":4,"result":{"turn":{"id":"turn-1","items":[],"itemsView":{"type":"complete"},"status":"inProgress","error":null,"startedAt":1,"completedAt":null,"durationMs":null}}}
+{"method":"item/agentMessage/delta","params":{"threadId":"thread-1","turnId":"turn-1","itemId":"item-1","delta":"hello"}}
+{"method":"turn/completed","params":{"threadId":"thread-1","turn":{"id":"turn-1","items":[],"itemsView":{"type":"complete"},"status":"completed","error":null,"startedAt":1,"completedAt":2,"durationMs":1000}}}

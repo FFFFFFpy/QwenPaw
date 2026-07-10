@@ -36,6 +36,10 @@ from .openai_provider import (
 )
 from .openai_response_provider import OpenAIResponseProvider
 from .openrouter_provider import OpenRouterProvider
+from .codex_subscription.provider import (
+    CodexSubscriptionProvider,
+    PROVIDER_OPENAI_CODEX,
+)
 from .provider import ModelInfo, Provider, ProviderInfo
 
 logger = logging.getLogger(__name__)
@@ -1387,6 +1391,17 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self._add_builtin(PROVIDER_KILO)
         self._add_builtin(PROVIDER_OPENAI)
         self._add_builtin(PROVIDER_OPENAI_RESPONSE)
+        codex_enabled = os.getenv(
+            "QWENPAW_CODEX_SUBSCRIPTION_ENABLED",
+            "true",
+        ).lower()
+        if codex_enabled not in {
+            "0",
+            "false",
+            "no",
+            "off",
+        }:
+            self._add_builtin(PROVIDER_OPENAI_CODEX)
         self._add_builtin(PROVIDER_AZURE_OPENAI)
         self._add_builtin(PROVIDER_ANTHROPIC)
         self._add_builtin(PROVIDER_GEMINI)
@@ -1994,6 +2009,8 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
 
         if provider_id == "openrouter":
             return OpenRouterProvider.model_validate(data)
+        if provider_id == "openai-codex":
+            return CodexSubscriptionProvider.model_validate(data)
         if provider_id == "anthropic" or chat_model == "AnthropicChatModel":
             return AnthropicProvider.model_validate(data)
         if provider_id == "gemini" or chat_model == "GeminiChatModel":

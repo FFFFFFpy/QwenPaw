@@ -110,6 +110,18 @@ describe("getIsConfigured", () => {
       ),
     ).toBe(false);
   });
+
+  it("uses OAuth state for cloud subscriptions instead of require_api_key", () => {
+    const subscription = provider({
+      id: "openai-codex",
+      require_api_key: false,
+      meta: { provider_kind: "cloud_subscription" },
+    });
+    expect(getIsConfigured(subscription)).toBe(false);
+    expect(getIsConfigured({ ...subscription, oauth_connected: true })).toBe(
+      true,
+    );
+  });
 });
 
 describe("groupProviders", () => {
@@ -166,5 +178,21 @@ describe("groupProviders", () => {
     ]);
     expect(result.grouped).toEqual([]);
     expect(result.ungrouped.map((p) => p.id)).toEqual(["a", "b"]);
+  });
+
+  it("keeps a cloud subscription out of API-key provider groups", () => {
+    const result = groupProviders([
+      provider({ id: "openai", provider_group: "openai" }),
+      provider({
+        id: "openai-codex",
+        provider_group: "openai",
+        meta: { provider_kind: "cloud_subscription" },
+      }),
+    ]);
+    expect(result.grouped).toEqual([]);
+    expect(result.ungrouped.map((item) => item.id)).toEqual([
+      "openai-codex",
+      "openai",
+    ]);
   });
 });

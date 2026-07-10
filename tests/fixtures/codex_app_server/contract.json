@@ -1,0 +1,35 @@
+{
+  "schema_version": "codex-cli 0.144.0-alpha.4",
+  "stable_schema_sha256": "85ea836927d6cfdd3c68a9bda17dba48d2573bbc282ab2d5775a5005e40bc9c3",
+  "experimental_schema_sha256": "f54352a19bec547cede4886b9b3f2ec1995ef5e4815efe435f9ed0d4b8a739ba",
+  "required_client_methods": [
+    "initialize",
+    "account/read",
+    "account/login/start",
+    "account/login/cancel",
+    "account/logout",
+    "account/rateLimits/read",
+    "model/list",
+    "thread/start",
+    "thread/unsubscribe",
+    "turn/start",
+    "turn/interrupt"
+  ],
+  "required_notifications": [
+    "initialized",
+    "account/login/completed",
+    "account/updated",
+    "item/agentMessage/delta",
+    "item/reasoning/summaryTextDelta",
+    "turn/completed"
+  ],
+  "supported_server_requests": ["item/tool/call"],
+  "blocked_server_requests": [
+    "item/commandExecution/requestApproval",
+    "item/fileChange/requestApproval",
+    "item/permissions/requestApproval",
+    "execCommandApproval",
+    "applyPatchApproval"
+  ]
+}
+

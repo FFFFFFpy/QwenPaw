@@ -3,6 +3,9 @@ import type { ProviderInfo } from "../../../api/types/provider";
 /** Determine if a provider has valid credentials configured. */
 export function getIsConfigured(provider: ProviderInfo): boolean {
   if (provider.id === "qwenpaw-local") return true;
+  if (provider.meta?.provider_kind === "cloud_subscription") {
+    return provider.oauth_connected === true;
+  }
   if (provider.is_custom && provider.base_url) return true;
   if (provider.require_api_key === false) return true;
   if (provider.require_api_key && provider.api_key) return true;
@@ -30,6 +33,10 @@ export function groupProviders(providers: ProviderInfo[]): {
   const ungrouped: ProviderInfo[] = [];
 
   for (const p of providers) {
+    if (p.meta?.provider_kind === "cloud_subscription") {
+      ungrouped.push(p);
+      continue;
+    }
     if (p.provider_group) {
       const existing = groupMap.get(p.provider_group);
       if (existing) {

@@ -120,6 +120,7 @@ function ModelsPage() {
     const cloudAvail: ProviderInfo[] = [];
 
     const isReady = (p: ProviderInfo) => {
+      if (p.meta?.provider_kind === "cloud_subscription") return true;
       const hasModels = p.models.length + p.extra_models.length > 0;
       if (p.is_local) {
         return hasModels || getIsConfigured(p);

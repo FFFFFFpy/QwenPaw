@@ -2,6 +2,7 @@ import React from "react";
 import type { ProviderInfo, ActiveModelsInfo } from "../../../../../api/types";
 import { LocalProviderCard } from "./LocalProviderCard";
 import { RemoteProviderCard } from "./RemoteProviderCard";
+import { SubscriptionProviderCard } from "./SubscriptionProviderCard";
 
 interface ProviderCardProps {
   provider: ProviderInfo;
@@ -20,6 +21,16 @@ export const ProviderCard = React.memo(function ProviderCard({
   if (provider.id === "qwenpaw-local") {
     return (
       <LocalProviderCard provider={provider} onOpenModels={onOpenModels} />
+    );
+  }
+
+  if (provider.meta?.provider_kind === "cloud_subscription") {
+    return (
+      <SubscriptionProviderCard
+        provider={provider}
+        onSaved={onSaved}
+        onOpenModels={onOpenModels}
+      />
     );
   }
 
