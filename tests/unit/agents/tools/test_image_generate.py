@@ -1,6 +1,7 @@
 import asyncio
 import importlib
 import json
+from pathlib import Path
 
 import pytest
 from agentscope.message import DataBlock, TextBlock
@@ -37,6 +38,9 @@ def reset_image_tasks(tmp_path, monkeypatch):
     fake = FakeService()
     monkeypatch.setattr(image_module, "_service", fake)
     monkeypatch.setattr(image_module, "SECRET_DIR", tmp_path / "secrets")
+    monkeypatch.setattr(
+        image_module, "_active_provider_id", lambda: "openai-codex"
+    )
     set_current_workspace_dir(tmp_path)
     set_current_session_id("session/one")
     yield fake
@@ -54,13 +58,69 @@ async def test_tool_saves_attachment_without_base64_history(reset_image_tasks):
         block for block in result.content if isinstance(block, TextBlock)
     )
     payload = json.loads(text.text)
-    path = image_module.Path(payload["files"][0])
+    path = next(iter(image_module._tasks.values())).paths[0]
     assert path.exists()
     assert path.read_bytes() == PNG
     assert "resources/sessions/session-one/images" in str(path)
+    assert payload["files"] == [
+        {
+            "filename": path.name,
+            "resource_id": f"image_{payload['task_id']}_1",
+        }
+    ]
+    assert data.id == payload["files"][0]["resource_id"]
     assert data.source.media_type == "image/png"
     assert "base64" not in text.text.lower()
     assert "../" not in path.name
+
+
+@pytest.mark.asyncio
+async def test_text_status_and_list_never_expose_local_paths(tmp_path):
+    generated = await image_tool(prompt="draw a private cat")
+    generated_text = next(
+        block for block in generated.content if isinstance(block, TextBlock)
+    ).text
+    task_id = json.loads(generated_text)["task_id"]
+    status = await image_tool(action="status", task_id=task_id)
+    listed = await image_tool(action="list")
+
+    text_results = [
+        generated_text,
+        *(
+            block.text
+            for block in status.content
+            if isinstance(block, TextBlock)
+        ),
+        *(
+            block.text
+            for block in listed.content
+            if isinstance(block, TextBlock)
+        ),
+    ]
+    for text in text_results:
+        assert str(tmp_path) not in text
+        assert str(Path.home()) not in text
+        assert "file://" not in text
+        payload = json.loads(text)
+        files = payload if isinstance(payload, list) else [payload]
+        for item in files:
+            for resource in item.get("files", []):
+                assert set(resource) == {"filename", "resource_id"}
+                assert not Path(resource["filename"]).is_absolute()
+
+
+@pytest.mark.asyncio
+async def test_non_codex_active_provider_cannot_send_image_data(
+    reset_image_tasks, monkeypatch
+):
+    monkeypatch.setattr(image_module, "_active_provider_id", lambda: "openai")
+
+    result = await image_tool(prompt="do not send this", images=["secret.png"])
+
+    payload = json.loads(result.content[0].text)
+    assert payload["ok"] is False
+    assert "openai-codex" in payload["error"]
+    assert reset_image_tasks.calls == 0
 
 
 @pytest.mark.asyncio

@@ -101,11 +101,43 @@ def _resource_dir(workspace: Path, session_id: str) -> Path:
     )
 
 
+def _active_provider_id() -> str | None:
+    """Resolve the current agent provider, falling back to the global slot."""
+    try:
+        from ...app.agent_context import get_current_agent_id
+        from ...config.config import load_agent_config
+
+        active = load_agent_config(get_current_agent_id()).active_model
+        if active and active.provider_id:
+            return active.provider_id
+    except Exception:
+        pass
+
+    try:
+        from ...providers.provider_manager import ProviderManager
+
+        active = ProviderManager.get_instance().get_active_model()
+        return active.provider_id if active else None
+    except Exception:
+        return None
+
+
+def _resource_id(record: _ImageTask, index: int) -> str:
+    """Return an opaque server-side handle without exposing its local path."""
+    return f"image_{record.task_id}_{index}"
+
+
 def _task_payload(record: _ImageTask) -> dict[str, Any]:
     return {
         "task_id": record.task_id,
         "status": record.status,
-        "files": [str(path) for path in record.paths],
+        "files": [
+            {
+                "filename": path.name,
+                "resource_id": _resource_id(record, index),
+            }
+            for index, path in enumerate(record.paths, start=1)
+        ],
         "error": record.error,
     }
 
@@ -122,7 +154,7 @@ def _text_result(payload: Any, *, error: bool = False) -> ToolChunk:
 
 def _media_result(record: _ImageTask, *, reused: bool = False) -> ToolChunk:
     blocks: list[Any] = []
-    for path in record.paths:
+    for index, path in enumerate(record.paths, start=1):
         mime = (
             "image/jpeg"
             if path.suffix == ".jpeg"
@@ -130,6 +162,7 @@ def _media_result(record: _ImageTask, *, reused: bool = False) -> ToolChunk:
         )
         blocks.append(
             DataBlock(
+                id=_resource_id(record, index),
                 source=URLSource(
                     url=_path_to_file_url(str(path)), media_type=mime
                 ),
@@ -245,6 +278,17 @@ async def image_generate(
             {"ok": False, "error": "Only gpt-image-2 is supported"},
             error=True,
         )
+    if _active_provider_id() != "openai-codex":
+        return _text_result(
+            {
+                "ok": False,
+                "error": (
+                    "Image generation is enabled only when the active "
+                    "provider is openai-codex"
+                ),
+            },
+            error=True,
+        )
 
     references = ([image] if image else []) + list(images or [])
     if action == "edit" and not references:
@@ -349,7 +393,7 @@ async def image_generate(
         record.status = "failed"
         record.updated_at = time.time()
         record.error = (
-            str(exc)[:500]
+            f"Image generation failed ({exc.error_code})"
             if isinstance(exc, CodexSubscriptionError)
             else "Image generation failed"
         )

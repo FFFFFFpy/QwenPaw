@@ -64,6 +64,8 @@ class QwenPawLocalWorkspace(AgentScopeLocalWorkspace):
 
         if agent_config is not None:
             allowed, denied = self._resolve_config_gates(agent_config)
+            if self._active_provider_id(agent_config) != "openai-codex":
+                denied.add("image_generate")
         else:
             allowed, denied = None, set()
 
@@ -85,6 +87,19 @@ class QwenPawLocalWorkspace(AgentScopeLocalWorkspace):
         ]
 
     # -------------------------------------------------------------- internal
+
+    @staticmethod
+    def _active_provider_id(agent_config: Any) -> str | None:
+        active = getattr(agent_config, "active_model", None)
+        if active and getattr(active, "provider_id", None):
+            return str(active.provider_id)
+        try:
+            from ...providers.provider_manager import ProviderManager
+
+            active = ProviderManager.get_instance().get_active_model()
+            return str(active.provider_id) if active else None
+        except Exception:
+            return None
 
     def _resolve_config_gates(
         self,

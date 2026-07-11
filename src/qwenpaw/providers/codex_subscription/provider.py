@@ -121,13 +121,12 @@ class ChatGPTSubscriptionProvider(Provider):
 
     async def get_info(self, mock_secret: bool = True) -> ProviderInfo:
         del mock_secret
+        account_status = self._token_store.status()
         data = self.model_dump()
         data.update(
             {
                 "api_key": "",
-                "oauth_connected": bool(
-                    self._token_store.status()["connected"]
-                ),
+                "oauth_connected": bool(account_status["connected"]),
             }
         )
         for model in data.get("models", []):
@@ -140,7 +139,10 @@ class ChatGPTSubscriptionProvider(Provider):
             "runtime_kind": "qwenpaw_native",
             "transport": "direct",
             "compatibility_route": True,
-            "account": self._token_store.status(),
+            "account": {
+                "connected": bool(account_status["connected"]),
+                "status": account_status["status"],
+            },
             "model_source": "bundled_compatibility_catalog",
             "context_size": 262144,
             "compact_threshold": 0.90,

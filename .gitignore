@@ -9,6 +9,11 @@
 # AI agent / copilot local config
 .aone_copilot/
 .agents/
+.qwenpaw.secret/
+.copaw.secret/
+resources/sessions/
+**/codex_subscription/oauth.enc
+**/.master_key
 
 # dependencies
 /.pnp
