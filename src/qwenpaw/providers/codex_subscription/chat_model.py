@@ -292,8 +292,6 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 getattr(self.parameters, "reasoning_effort", None),
                 model_row,
             )
-            mcp_server_names = await self.runtime.list_mcp_server_names()
-
             thread_params: dict[str, Any] = {
                 "model": model_name,
                 "cwd": temporary.name,
@@ -304,9 +302,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 "developerInstructions": (
                     _DEVELOPER_INSTRUCTIONS + tool_instruction
                 ),
-                "config": build_tool_isolation_config(
-                    mcp_server_names=mcp_server_names,
-                ),
+                "config": build_tool_isolation_config(),
             }
             if capabilities.runtime_workspace_roots:
                 thread_params["runtimeWorkspaceRoots"] = [temporary.name]

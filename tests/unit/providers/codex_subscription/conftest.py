@@ -30,6 +30,7 @@ class StubRuntime:
         self.binary_version: str | None = None
         self.generation_id = "fixture"
         self.mcp_server_names: tuple[str, ...] = ()
+        self.mcp_server_name_list_calls = 0
         self.settings = SimpleNamespace(
             tool_wait_timeout_seconds=1.0,
             max_message_bytes=4 * 1024 * 1024,
@@ -68,6 +69,7 @@ class StubRuntime:
         return response
 
     async def list_mcp_server_names(self) -> tuple[str, ...]:
+        self.mcp_server_name_list_calls += 1
         return self.mcp_server_names
 
     @property

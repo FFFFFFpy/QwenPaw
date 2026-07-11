@@ -93,7 +93,9 @@ def schedule_completed_turn(stub_runtime, *, include_reasoning: bool = False):
 
 
 async def test_streams_text_and_reasoning_and_cleans_up(stub_runtime):
-    stub_runtime.mcp_server_names = ("user-configured",)
+    # Regression: codex-cli may report the built-in codex_apps MCP service.
+    # A partial per-server entry is not a valid MCP transport configuration.
+    stub_runtime.mcp_server_names = ("codex_apps",)
     model = make_model(stub_runtime)
     schedule_completed_turn(stub_runtime, include_reasoning=True)
     response = await model(
@@ -126,9 +128,8 @@ async def test_streams_text_and_reasoning_and_cleans_up(stub_runtime):
     assert thread_params["config"]["orchestrator"] == {
         "mcp": {"enabled": False},
     }
-    assert thread_params["config"]["mcp_servers"] == {
-        "user-configured": {"enabled": False},
-    }
+    assert "mcp_servers" not in thread_params["config"]
+    assert stub_runtime.mcp_server_name_list_calls == 0
     assert thread_params["runtimeWorkspaceRoots"] == [thread_params["cwd"]]
     assert thread_params["environments"] == []
     turn_params = next(

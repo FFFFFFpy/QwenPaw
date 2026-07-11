@@ -3,7 +3,6 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterable
 from dataclasses import dataclass
 from typing import Any
 
@@ -25,8 +24,6 @@ class CodexToolIsolationProfile:
 
 def build_tool_isolation_config(
     profile: CodexToolIsolationProfile | None = None,
-    *,
-    mcp_server_names: Iterable[str] = (),
 ) -> dict[str, Any]:
     """Build thread-local overrides using keys from Codex's config schema.
 
@@ -94,9 +91,4 @@ def build_tool_isolation_config(
         config["web_search"] = "disabled"
     if selected.disable_mcp:
         config["orchestrator"] = {"mcp": {"enabled": False}}
-        config["mcp_servers"] = {
-            name: {"enabled": False}
-            for name in sorted(set(mcp_server_names))
-            if name
-        }
     return config

@@ -19,17 +19,11 @@ def test_default_profile_disables_every_builtin_side_effect_surface():
     profile = CodexToolIsolationProfile()
     assert all(profile.__dict__.values())
 
-    config = build_tool_isolation_config(
-        profile,
-        mcp_server_names=("zeta", "alpha", "alpha"),
-    )
+    config = build_tool_isolation_config(profile)
 
     assert config["web_search"] == "disabled"
     assert config["orchestrator"] == {"mcp": {"enabled": False}}
-    assert config["mcp_servers"] == {
-        "alpha": {"enabled": False},
-        "zeta": {"enabled": False},
-    }
+    assert "mcp_servers" not in config
     assert config["features"] == {
         "shell_tool": False,
         "shell_zsh_fork": False,
@@ -56,6 +50,9 @@ def test_default_profile_disables_every_builtin_side_effect_surface():
         "multi_agent_v2": False,
         "enable_fanout": False,
     }
+    assert config["features"]["enable_mcp_apps"] is False
+    assert config["features"]["apps"] is False
+    assert config["features"]["plugins"] is False
     assert config["tools"] == {
         "experimental_request_user_input": {"enabled": False},
     }

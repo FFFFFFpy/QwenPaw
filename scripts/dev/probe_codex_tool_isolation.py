@@ -180,7 +180,6 @@ async def _run(args: argparse.Namespace) -> int:
             }
 
         runtime.register_server_request("item/tool/call", dynamic_tool)
-        mcp_server_names = await runtime.list_mcp_server_names()
         with tempfile.TemporaryDirectory(
             prefix="qwenpaw-codex-isolation-",
         ) as cwd:
@@ -198,9 +197,7 @@ async def _run(args: argparse.Namespace) -> int:
                         "Do not use built-in tools. The qwenpaw_probe dynamic "
                         "tool is the only allowed action."
                     ),
-                    "config": build_tool_isolation_config(
-                        mcp_server_names=mcp_server_names,
-                    ),
+                    "config": build_tool_isolation_config(),
                     "dynamicTools": [
                         {
                             "name": "qwenpaw_probe",
