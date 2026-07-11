@@ -31,6 +31,9 @@ from ...runtime.tool_registry import tool_descriptor
 from ...tool_calls import cancellable_wait
 from .file_io import _path_to_file_url
 
+TASK_REGISTRY_TTL_SECONDS = 60 * 60
+FINGERPRINT_REGISTRY_TTL_SECONDS = 15 * 60
+
 
 @dataclass
 class _ImageTask:
@@ -39,14 +42,21 @@ class _ImageTask:
     fingerprint: str
     status: str = "pending"
     created_at: float = field(default_factory=time.time)
+    updated_at: float = field(default_factory=time.time)
     paths: list[Path] = field(default_factory=list)
     error: str | None = None
     task: asyncio.Task[list[GeneratedImage]] | None = None
     save_lock: asyncio.Lock = field(default_factory=asyncio.Lock)
 
 
+@dataclass(slots=True)
+class _FingerprintEntry:
+    task_id: str
+    created_at: float = field(default_factory=time.time)
+
+
 _tasks: dict[str, _ImageTask] = {}
-_fingerprints: dict[tuple[str, str], str] = {}
+_fingerprints: dict[tuple[str, str], _FingerprintEntry] = {}
 _registry_lock = asyncio.Lock()
 _service: ImageGenerationService | None = None
 
@@ -56,6 +66,24 @@ def _get_service() -> ImageGenerationService:
     if _service is None:
         _service = ImageGenerationService()
     return _service
+
+
+def _sweep_registry(now: float | None = None) -> None:
+    """Bound completed task history and stale in-flight fingerprints."""
+    current = time.time() if now is None else now
+    for key, entry in list(_fingerprints.items()):
+        task = _tasks.get(entry.task_id)
+        if (
+            task is None
+            or task.status != "running"
+            or current - entry.created_at > FINGERPRINT_REGISTRY_TTL_SECONDS
+        ):
+            _fingerprints.pop(key, None)
+    for task_id, record in list(_tasks.items()):
+        if current - record.updated_at > TASK_REGISTRY_TTL_SECONDS:
+            if record.task is not None and not record.task.done():
+                record.task.cancel()
+            _tasks.pop(task_id, None)
 
 
 def _safe_component(value: str, fallback: str) -> str:
@@ -186,23 +214,27 @@ async def image_generate(
     workspace = Path(get_current_workspace_dir() or WORKING_DIR).resolve()
 
     if action == "list":
-        return _text_result(
-            [
+        async with _registry_lock:
+            _sweep_registry()
+            payload = [
                 _task_payload(record)
                 for record in _tasks.values()
                 if record.session_id == session_id
             ]
-        )
+        return _text_result(payload)
     if action in {"status", "cancel"}:
-        record = _tasks.get(task_id or "")
-        if record is None or record.session_id != session_id:
-            return _text_result(
-                {"ok": False, "error": "Image task was not found"},
-                error=True,
-            )
-        if action == "cancel" and record.task and not record.task.done():
-            record.task.cancel()
-            record.status = "cancelled"
+        async with _registry_lock:
+            _sweep_registry()
+            record = _tasks.get(task_id or "")
+            if record is None or record.session_id != session_id:
+                return _text_result(
+                    {"ok": False, "error": "Image task was not found"},
+                    error=True,
+                )
+            if action == "cancel" and record.task and not record.task.done():
+                record.task.cancel()
+                record.status = "cancelled"
+                record.updated_at = time.time()
         return _text_result(_task_payload(record))
     if action not in {"generate", "edit"}:
         return _text_result(
@@ -260,15 +292,19 @@ async def image_generate(
     ).hexdigest()
 
     async with _registry_lock:
-        existing_id = _fingerprints.get((session_id, fingerprint))
-        existing = _tasks.get(existing_id or "")
-        if (
+        _sweep_registry()
+        fingerprint_key = (session_id, fingerprint)
+        fingerprint_entry = _fingerprints.get(fingerprint_key)
+        existing = _tasks.get(
+            fingerprint_entry.task_id if fingerprint_entry else ""
+        )
+        joined_running = bool(
             existing
-            and existing.status == "completed"
-            and all(path.exists() for path in existing.paths)
-        ):
-            return _media_result(existing, reused=True)
-        if existing and existing.task and not existing.task.done():
+            and existing.status == "running"
+            and existing.task
+            and not existing.task.done()
+        )
+        if joined_running:
             record = existing
         else:
             record = _ImageTask(
@@ -286,7 +322,7 @@ async def image_generate(
                 )
             )
             _tasks[record.task_id] = record
-            _fingerprints[(session_id, fingerprint)] = record.task_id
+            _fingerprints[fingerprint_key] = _FingerprintEntry(record.task_id)
 
     try:
         generated = await cancellable_wait(record.task, fallback_secs=600)
@@ -299,12 +335,19 @@ async def image_generate(
                     filename,
                 )
                 record.status = "completed"
-        return _media_result(record)
+                record.updated_at = time.time()
+        async with _registry_lock:
+            entry = _fingerprints.get((session_id, fingerprint))
+            if entry and entry.task_id == record.task_id:
+                _fingerprints.pop((session_id, fingerprint), None)
+        return _media_result(record, reused=joined_running)
     except asyncio.CancelledError:
         record.status = "cancelled"
+        record.updated_at = time.time()
         raise
     except Exception as exc:  # stable tool boundary; never expose credentials
         record.status = "failed"
+        record.updated_at = time.time()
         record.error = (
             str(exc)[:500]
             if isinstance(exc, CodexSubscriptionError)

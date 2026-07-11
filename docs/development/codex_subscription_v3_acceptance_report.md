@@ -2,6 +2,8 @@
 
 Date: 2026-07-11 (Asia/Tokyo)
 
+Last merge-hardening update: 2026-07-12 (Asia/Tokyo)
+
 ## Result
 
 All v3 P0/P1 implementation gates and the required live-account smoke matrix
@@ -13,6 +15,43 @@ inference, Codex process, thread/start or turn/start route is present.
 The integration targets the non-public
 `chatgpt.com/backend-api/codex/responses` compatibility route. This is not the
 OpenAI Platform Responses API and the upstream contract may change.
+
+## Merge-hardening verification (2026-07-12)
+
+The final review findings were resolved without changing the transport
+architecture and without restoring App Server inference:
+
+- OAuth refresh single-flight is shared by credential path and account across
+  independent `TokenStore` instances. Concurrent 401s from separate stores
+  perform one refresh.
+- `image_generate` coalesces only identical requests that are still running.
+  Completed requests generate again, and task/fingerprint registries have
+  bounded TTL cleanup.
+- Image tool results preserve every returned `DataBlock`; two to four images
+  render in a two-column preview grid.
+- Remote references use QwenPaw's connector-level SSRF-safe downloader. DNS
+  resolution is validated in the actual connection path, environment proxies
+  are disabled, and redirects are re-evaluated under the same policy.
+- OAuth polling is abortable and guarded by modal activity/run generation;
+  closing the modal stops all further polling and failed state is non-spinning.
+- Logged-out accounts and models marked `unavailable` cannot be selected as
+  the active subscription model in either UI or the active-model API.
+- JPEG with a transparent background is rejected by service and settings
+  validation, and the invalid pair is disabled in the model UI.
+- Subscription `ModelInfo` no longer assigns the catalog output capability to
+  generic `max_tokens`; `catalog_max_output_tokens=128000` remains read-only
+  catalog metadata.
+
+Merge-hardening automated results:
+
+- Final targeted image/security/token/settings regression: 48 passed.
+- Provider, model switching, HTTP safety, Codex and image regression: 358
+  passed.
+- Focused console regression: 14 passed.
+- Complete console suite: 125 test files and 1,124 tests passed.
+- TypeScript checking and production Vite build passed.
+- Flake8 on changed Python files, Prettier on changed console files, and
+  whitespace checks passed.
 
 ## Live-account smoke results
 

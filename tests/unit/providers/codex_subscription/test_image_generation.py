@@ -149,3 +149,25 @@ def test_reference_outside_workspace_is_denied(tmp_path):
 
         asyncio.run(service._reference_data_url(str(outside), tmp_path))
     assert caught.value.error_code == "CODEX_IMAGE_REFERENCE_DENIED"
+
+
+@pytest.mark.asyncio
+async def test_service_rejects_jpeg_with_transparent_background(tmp_path):
+    store = token_store(tmp_path)
+    service = ImageGenerationService(
+        token_store=store,
+        oauth_service=OAuthService(store),
+        http_client=FakeHTTP(encoded_image("JPEG")),
+    )
+    with pytest.raises(CodexSubscriptionError) as caught:
+        await service.generate(
+            prompt="draw",
+            references=[],
+            workspace=tmp_path,
+            size="1024x1024",
+            quality="auto",
+            output_format="jpeg",
+            background="transparent",
+            count=1,
+        )
+    assert caught.value.error_code == "CODEX_IMAGE_OPTIONS_INVALID"

@@ -130,6 +130,8 @@ class ChatGPTSubscriptionProvider(Provider):
                 ),
             }
         )
+        for model in data.get("models", []):
+            model["availability"] = self.availability(str(model["id"]))
         data["meta"] = {
             **self.meta,
             "supports_oauth": True,

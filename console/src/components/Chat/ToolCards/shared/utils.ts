@@ -131,9 +131,9 @@ function classifyMediaType(ext: string): MediaType {
  *
  * Also handles `{"type":"image","source":{...}}` etc.
  */
-function extractUrlFromResultBlocks(
+function extractUrlsFromResultBlocks(
   result: unknown,
-): { url: string; filename?: string } | null {
+): Array<{ url: string; filename?: string }> {
   let arr: unknown[] | null = null;
 
   if (typeof result === "string") {
@@ -141,13 +141,15 @@ function extractUrlFromResultBlocks(
       const parsed = JSON.parse(result);
       if (Array.isArray(parsed)) arr = parsed;
     } catch {
-      return null;
+      return [];
     }
   } else if (Array.isArray(result)) {
     arr = result;
   }
 
-  if (!arr) return null;
+  if (!arr) return [];
+
+  const values: Array<{ url: string; filename?: string }> = [];
 
   for (const block of arr) {
     if (!block || typeof block !== "object") continue;
@@ -157,34 +159,36 @@ function extractUrlFromResultBlocks(
     if (b.source && typeof b.source === "object") {
       const src = b.source as Record<string, unknown>;
       if (typeof src.url === "string" && src.url) {
-        return {
+        values.push({
           url: src.url,
           filename:
             typeof b.filename === "string"
               ? b.filename
               : typeof b.name === "string"
-                ? b.name
-                : undefined,
-        };
+              ? b.name
+              : undefined,
+        });
+        continue;
       }
     }
 
     // Flat blocks: { url: "..." } or { path: "..." }
     if (typeof b.url === "string" && b.url) {
-      return {
+      values.push({
         url: b.url,
         filename: typeof b.filename === "string" ? b.filename : undefined,
-      };
+      });
+      continue;
     }
     if (typeof b.path === "string" && b.path) {
-      return {
+      values.push({
         url: b.path,
         filename: typeof b.filename === "string" ? b.filename : undefined,
-      };
+      });
     }
   }
 
-  return null;
+  return values;
 }
 
 /** Read the first usable path from params (multiple key variants). */
@@ -197,32 +201,38 @@ function getPathFromParams(params: Record<string, unknown>): string {
     "") as string;
 }
 
-/** Extract media info from tool params/result (unified for all tool names) */
-export function getMediaInfo(tc: ToolCallContent): MediaInfo | null {
+/** Extract every media item from tool params/result. */
+export function getMediaInfos(tc: ToolCallContent): MediaInfo[] {
   const params = tc.params || {};
   const paramPath = getPathFromParams(params);
 
-  // 1) Try to get a reliable URL from result content blocks
-  const fromResult = extractUrlFromResultBlocks(tc.result);
+  // 1) Preserve all result DataBlocks (image_generate can return 2-4).
+  const fromResult = extractUrlsFromResultBlocks(tc.result);
+  if (fromResult.length > 0) {
+    return fromResult.map(({ url, filename }) => {
+      const name = filename || url.split("/").pop() || "file";
+      return {
+        url: toDisplayUrl(url),
+        name,
+        type: classifyMediaType(getFileExtFromPath(name)),
+      };
+    });
+  }
 
   // 2) Try text-based regex extraction (e.g. "saved to /path/to/file")
   let textUrl = "";
-  if (!fromResult && tc.result && typeof tc.result === "string") {
+  if (tc.result && typeof tc.result === "string") {
     textUrl = extractUrlFromText(tc.result) || "";
   }
 
-  const rawUrl = fromResult?.url || paramPath || textUrl || "";
-  if (!rawUrl) return null;
+  const rawUrl = paramPath || textUrl || "";
+  if (!rawUrl) return [];
 
-  const name =
-    fromResult?.filename ||
-    rawUrl.split("/").pop() ||
-    paramPath.split("/").pop() ||
-    "file";
+  const name = rawUrl.split("/").pop() || paramPath.split("/").pop() || "file";
   const ext = getFileExtFromPath(name);
   const mediaType = classifyMediaType(ext);
 
-  return { url: toDisplayUrl(rawUrl), name, type: mediaType };
+  return [{ url: toDisplayUrl(rawUrl), name, type: mediaType }];
 }
 
 /** Try to extract a file URL from a text result via regex patterns */

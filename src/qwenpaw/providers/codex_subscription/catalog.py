@@ -73,7 +73,6 @@ def subscription_models() -> list[ModelInfo]:
             supports_image=True,
             supports_video=False,
             probe_source="documentation",
-            max_tokens=CATALOG_MAX_OUTPUT_TOKENS,
             max_input_length=WORK_CONTEXT_TOKENS,
             reasoning_effort=None,
             reasoning_effort_options=list(data["efforts"]),

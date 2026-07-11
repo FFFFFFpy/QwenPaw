@@ -1,7 +1,12 @@
 import json
 
+import pytest
+from pydantic import ValidationError
+
+from qwenpaw.providers.codex_subscription.catalog import subscription_models
 from qwenpaw.providers.codex_subscription.settings import (
     CodexSubscriptionSettings,
+    ImageModelSettings,
 )
 
 
@@ -40,3 +45,13 @@ def test_v1_v2_global_settings_migrate_only_supported_efforts(tmp_path):
         not value.relay_reasoning for value in settings.chat_models.values()
     )
     assert settings.image_models["gpt-image-2"].count == 1
+
+
+def test_jpeg_transparent_combination_is_rejected():
+    with pytest.raises(ValidationError):
+        ImageModelSettings(output_format="jpeg", background="transparent")
+
+
+def test_subscription_model_info_does_not_use_catalog_output_as_max_tokens():
+    models = subscription_models()
+    assert all(model.max_tokens != 128_000 for model in models)

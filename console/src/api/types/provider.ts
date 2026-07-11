@@ -6,6 +6,7 @@ export interface ModelInfo {
   supports_video: boolean | null;
   probe_source?: string | null;
   is_free?: boolean;
+  availability?: "unknown" | "available" | "unavailable" | null;
   max_tokens: number;
   max_input_length: number;
   generate_kwargs: Record<string, unknown>;

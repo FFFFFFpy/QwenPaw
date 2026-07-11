@@ -11,7 +11,8 @@ import { ToolOutlined } from "@ant-design/icons";
 import type { ToolCallContent } from "../shared/types";
 import { MediaPreview, ToolCardShell } from "../shared";
 import { DefaultBlock } from "../shared";
-import { getMediaInfo, stringifyResult } from "../shared/utils";
+import { getMediaInfos, stringifyResult } from "../shared/utils";
+import styles from "../shared/toolCards.module.less";
 
 export interface GenericToolCardProps {
   content: ToolCallContent;
@@ -27,7 +28,8 @@ const GenericToolCard: React.FC<GenericToolCardProps> = ({
     ? `${content.serverLabel} / ${content.name}`
     : content.name;
   const resultText = stringifyResult(content.result);
-  const media = getMediaInfo(content);
+  const media = getMediaInfos(content);
+  const hasMedia = media.length > 0;
 
   return (
     <ToolCardShell
@@ -35,10 +37,18 @@ const GenericToolCard: React.FC<GenericToolCardProps> = ({
       title={t("tool.execute", { tool: toolLabel })}
       content={content}
       isStreaming={isStreaming}
-      defaultOpen={Boolean(media) && content.status === "done"}
+      defaultOpen={hasMedia && content.status === "done"}
     >
-      {media && <MediaPreview media={media} />}
-      {!media && resultText && (
+      {hasMedia && (
+        <div
+          className={media.length > 1 ? styles.toolCallMediaGrid : undefined}
+        >
+          {media.map((item) => (
+            <MediaPreview media={item} key={`${item.url}-${item.name}`} />
+          ))}
+        </div>
+      )}
+      {!hasMedia && resultText && (
         <DefaultBlock title="Output" content={resultText} />
       )}
     </ToolCardShell>

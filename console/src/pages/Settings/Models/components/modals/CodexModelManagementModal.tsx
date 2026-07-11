@@ -104,6 +104,7 @@ export function CodexModelManagementModal({ open, onClose, onSaved }: Props) {
   };
 
   const setActive = async (model: CodexChatModel) => {
+    if (!account?.connected || model.availability === "unavailable") return;
     setBusy(true);
     try {
       await api.setActiveLlm({
@@ -173,7 +174,11 @@ export function CodexModelManagementModal({ open, onClose, onSaved }: Props) {
         {kind === "chat" && !(model as CodexChatModel).is_active && (
           <button
             className={styles.button}
-            disabled={busy}
+            disabled={
+              busy ||
+              !account?.connected ||
+              model.availability === "unavailable"
+            }
             onClick={() => void setActive(model as CodexChatModel)}
           >
             设为当前模型
@@ -380,7 +385,18 @@ export function CodexModelManagementModal({ open, onClose, onSaved }: Props) {
                   }
                 >
                   {options.map((option) => (
-                    <option value={option} key={option}>
+                    <option
+                      value={option}
+                      key={option}
+                      disabled={
+                        (key === "output_format" &&
+                          option === "jpeg" &&
+                          imageSettings.background === "transparent") ||
+                        (key === "background" &&
+                          option === "transparent" &&
+                          imageSettings.output_format === "jpeg")
+                      }
+                    >
                       {imageOptionLabel(option)}
                     </option>
                   ))}

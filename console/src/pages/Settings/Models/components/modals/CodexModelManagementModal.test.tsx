@@ -96,6 +96,13 @@ describe("CodexModelManagementModal", () => {
       reasoning_effort: null,
       relay_reasoning: true,
     });
+    mocks.getImageModelSettings.mockResolvedValue({
+      size: "1024x1024",
+      quality: "auto",
+      output_format: "jpeg",
+      background: "opaque",
+      count: 1,
+    });
   });
 
   it("shows separate chat and image groups with accurate capabilities", async () => {
@@ -146,5 +153,48 @@ describe("CodexModelManagementModal", () => {
     fireEvent.click(screen.getByText("重新加载内置目录"));
     await waitFor(() => expect(mocks.refreshModels).toHaveBeenCalledTimes(1));
     expect(mocks.success).toHaveBeenCalledWith("内置兼容目录已重新加载");
+  });
+
+  it("disables activation while logged out", async () => {
+    mocks.getAccount.mockResolvedValue({ connected: false });
+    render(
+      <CodexModelManagementModal open onClose={vi.fn()} onSaved={vi.fn()} />,
+    );
+    const luna = await screen.findByText("GPT-5.6 Luna");
+    const row = luna.closest("div[class*='row']") as HTMLElement;
+    expect(
+      within(row).getByRole("button", { name: "设为当前模型" }),
+    ).toBeDisabled();
+  });
+
+  it("disables activation when the catalog marks a model unavailable", async () => {
+    mocks.getModels.mockResolvedValue({
+      ...catalog,
+      chat_models: catalog.chat_models.map((model) =>
+        model.model_id === "gpt-5.6-luna"
+          ? { ...model, availability: "unavailable" as const }
+          : model,
+      ),
+    });
+    render(
+      <CodexModelManagementModal open onClose={vi.fn()} onSaved={vi.fn()} />,
+    );
+    const luna = await screen.findByText("GPT-5.6 Luna");
+    const row = luna.closest("div[class*='row']") as HTMLElement;
+    expect(
+      within(row).getByRole("button", { name: "设为当前模型" }),
+    ).toBeDisabled();
+  });
+
+  it("disables jpeg and transparent as an invalid pair", async () => {
+    render(
+      <CodexModelManagementModal open onClose={vi.fn()} onSaved={vi.fn()} />,
+    );
+    const image = await screen.findByText("GPT Image 2");
+    const row = image.closest("div[class*='row']") as HTMLElement;
+    fireEvent.click(within(row).getByRole("button", { name: "设置" }));
+    await waitFor(() => expect(mocks.getImageModelSettings).toHaveBeenCalled());
+    const transparent = screen.getByRole("option", { name: "Transparent" });
+    expect(transparent).toBeDisabled();
   });
 });

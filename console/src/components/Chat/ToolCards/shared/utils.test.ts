@@ -1,10 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
-import {
-  formatAgentList,
-  formatMemorySearch,
-  getMediaInfo,
-} from "./utils";
+import { formatAgentList, formatMemorySearch, getMediaInfos } from "./utils";
 
 const translate = ((key: string) => {
   const translations: Record<string, string> = {
@@ -115,9 +111,9 @@ describe("formatAgentList", () => {
   });
 });
 
-describe("getMediaInfo", () => {
-  it("extracts generated images from DataBlock tool results", () => {
-    const media = getMediaInfo({
+describe("getMediaInfos", () => {
+  it("extracts every generated image from DataBlock tool results", () => {
+    const media = getMediaInfos({
       type: "tool_call",
       id: "call-image",
       name: "image_generate",
@@ -133,16 +129,30 @@ describe("getMediaInfo", () => {
           },
           name: "generated.png",
         },
+        {
+          type: "data",
+          source: {
+            type: "url",
+            url: "file:///workspace/resources/generated-2.webp",
+            media_type: "image/webp",
+          },
+          name: "generated-2.webp",
+        },
         { type: "text", text: '{"status":"completed"}' },
       ],
     });
 
-    expect(media).toMatchObject({
+    expect(media).toHaveLength(2);
+    expect(media[0]).toMatchObject({
       name: "generated.png",
       type: "image",
     });
-    expect(media?.url).toContain(
+    expect(media[0].url).toContain(
       "/files/preview/workspace/resources/generated.png",
     );
+    expect(media[1]).toMatchObject({
+      name: "generated-2.webp",
+      type: "image",
+    });
   });
 });

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { Modal, Button } from "@agentscope-ai/design";
-import { Loader2, ExternalLink } from "lucide-react";
+import { CircleX, Loader2, ExternalLink } from "lucide-react";
 import { useTranslation } from "react-i18next";
 import { providerApi } from "../../../api/modules/provider";
 import { useAppMessage } from "../../../hooks/useAppMessage";
@@ -23,69 +23,124 @@ export function OAuthConfirmModal({
 }: OAuthConfirmModalProps) {
   const { t } = useTranslation();
   const { message } = useAppMessage();
-  const [phase, setPhase] = useState<"confirm" | "waiting">("confirm");
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const [phase, setPhase] = useState<"confirm" | "waiting" | "failed">(
+    "confirm",
+  );
+  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const timeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const abortRef = useRef<AbortController | null>(null);
+  const activeRef = useRef(false);
+  const runRef = useRef(0);
+
+  const stop = useCallback(() => {
+    runRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (pollRef.current) clearTimeout(pollRef.current);
+    if (timeoutRef.current) clearTimeout(timeoutRef.current);
+    pollRef.current = null;
+    timeoutRef.current = null;
+  }, []);
 
   useEffect(() => {
-    if (!open) {
-      setPhase("confirm");
-      if (pollRef.current) clearInterval(pollRef.current);
-      if (timeoutRef.current) clearTimeout(timeoutRef.current);
-    }
-  }, [open]);
+    activeRef.current = open;
+    if (open) setPhase("confirm");
+    else stop();
+    return () => {
+      activeRef.current = false;
+      stop();
+    };
+  }, [open, stop]);
+
+  const handleCancel = useCallback(() => {
+    activeRef.current = false;
+    stop();
+    onCancel();
+  }, [onCancel, stop]);
 
   const handleContinue = useCallback(async () => {
+    stop();
+    activeRef.current = true;
+    const run = runRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      const { authorize_url, state } = await providerApi.startOAuth(providerId);
+      const { authorize_url, state } = await providerApi.startOAuth(
+        providerId,
+        controller.signal,
+      );
+      if (!activeRef.current || run !== runRef.current) return;
       setPhase("waiting");
 
       openExternalLink(authorize_url, "_blank", "popup,width=600,height=700");
 
       // Poll backend status until completion (same pattern as MCP OAuth)
-      pollRef.current = setInterval(async () => {
+      const poll = async () => {
+        if (!activeRef.current || run !== runRef.current) return;
         try {
           const { status } = await providerApi.getOAuthStatus(
             providerId,
             state,
+            controller.signal,
           );
+          if (!activeRef.current || run !== runRef.current) return;
           if (status === "completed") {
-            if (pollRef.current) clearInterval(pollRef.current);
-            if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            stop();
             message.success(
               t("modelSelector.oauthConnected", { provider: providerName }),
             );
             onSuccess();
           } else if (status === "failed") {
-            if (pollRef.current) clearInterval(pollRef.current);
+            if (pollRef.current) clearTimeout(pollRef.current);
             if (timeoutRef.current) clearTimeout(timeoutRef.current);
+            pollRef.current = null;
+            timeoutRef.current = null;
+            setPhase("failed");
             message.error(t("modelSelector.oauthFailed"));
-            onCancel();
+          } else {
+            pollRef.current = setTimeout(() => void poll(), 2000);
           }
-        } catch {
-          // Ignore polling errors
+        } catch (error) {
+          if (
+            activeRef.current &&
+            run === runRef.current &&
+            !(error instanceof DOMException && error.name === "AbortError")
+          ) {
+            pollRef.current = setTimeout(() => void poll(), 2000);
+          }
         }
-      }, 2000);
+      };
+      pollRef.current = setTimeout(() => void poll(), 2000);
 
       // Timeout after 5 minutes
       timeoutRef.current = setTimeout(() => {
-        if (pollRef.current) clearInterval(pollRef.current);
+        if (!activeRef.current || run !== runRef.current) return;
+        if (pollRef.current) clearTimeout(pollRef.current);
+        pollRef.current = null;
+        setPhase("failed");
       }, 300000);
     } catch (err) {
+      if (
+        !activeRef.current ||
+        run !== runRef.current ||
+        (err instanceof DOMException && err.name === "AbortError")
+      ) {
+        return;
+      }
+      setPhase("failed");
       message.error(
         err instanceof Error ? err.message : t("modelSelector.oauthFailed"),
       );
-      onCancel();
     }
-  }, [providerId, providerName, onSuccess, onCancel, message, t]);
+  }, [providerId, providerName, onSuccess, message, stop, t]);
 
   return (
     <Modal
       open={open}
-      onCancel={onCancel}
+      onCancel={handleCancel}
       footer={null}
-      closable={phase === "confirm"}
-      maskClosable={phase === "confirm"}
+      closable={phase !== "waiting"}
+      maskClosable={phase !== "waiting"}
       width={420}
     >
       {phase === "confirm" ? (
@@ -101,13 +156,13 @@ export function OAuthConfirmModal({
             {t("modelSelector.oauthDescription", { provider: providerName })}
           </p>
           <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
-            <Button onClick={onCancel}>{t("common.cancel")}</Button>
+            <Button onClick={handleCancel}>{t("common.cancel")}</Button>
             <Button type="primary" onClick={handleContinue}>
               {t("modelSelector.oauthContinue")}
             </Button>
           </div>
         </div>
-      ) : (
+      ) : phase === "waiting" ? (
         <div style={{ textAlign: "center", padding: "24px 0" }}>
           <Loader2
             size={32}
@@ -119,7 +174,20 @@ export function OAuthConfirmModal({
           <p style={{ color: "var(--text-secondary)", margin: "0 0 24px" }}>
             {t("modelSelector.oauthWaitingDescription")}
           </p>
-          <Button onClick={onCancel}>{t("common.cancel")}</Button>
+          <Button onClick={handleCancel}>{t("common.cancel")}</Button>
+        </div>
+      ) : (
+        <div style={{ textAlign: "center", padding: "24px 0" }}>
+          <CircleX size={32} style={{ color: "#ef4444" }} />
+          <h3 style={{ margin: "16px 0 8px", fontSize: 16, fontWeight: 600 }}>
+            {t("modelSelector.oauthFailed")}
+          </h3>
+          <div style={{ display: "flex", gap: 12, justifyContent: "center" }}>
+            <Button onClick={handleCancel}>{t("common.cancel")}</Button>
+            <Button type="primary" onClick={() => void handleContinue()}>
+              {t("common.retry", { defaultValue: "Retry" })}
+            </Button>
+          </div>
         </div>
       )}
     </Modal>

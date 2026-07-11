@@ -303,6 +303,14 @@ export default function ModelSelector() {
       (model) => model.id === modelId,
     );
 
+    if (
+      providerId === "openai-codex" &&
+      targetModel?.availability === "unavailable"
+    ) {
+      message.error("该订阅模型当前不可用");
+      return;
+    }
+
     // Check if OAuth is needed
     if (
       targetProvider?.supports_oauth &&
@@ -455,14 +463,22 @@ export default function ModelSelector() {
             {visibleModels.map((model) => {
               const isActive =
                 provider.id === activeProviderId && model.id === activeModelId;
+              const isUnavailable =
+                provider.id === "openai-codex" &&
+                model.availability === "unavailable";
               return (
                 <div
                   key={model.id}
                   className={[
                     styles.modelItem,
                     isActive ? styles.modelItemActive : "",
+                    isUnavailable ? styles.modelItemDisabled : "",
                   ].join(" ")}
-                  onClick={() => handleSelect(provider.id, model.id)}
+                  onClick={
+                    isUnavailable
+                      ? undefined
+                      : () => handleSelect(provider.id, model.id)
+                  }
                 >
                   <span className={styles.modelName}>
                     {model.name || model.id}
@@ -485,6 +501,7 @@ export default function ModelSelector() {
                       </span>
                     )}
                     {isActive && <CheckOutlined className={styles.checkIcon} />}
+                    {isUnavailable && <span>不可用</span>}
                   </div>
                 </div>
               );

@@ -1,10 +1,12 @@
 from types import SimpleNamespace
 import time
 
-from fastapi import FastAPI
+from fastapi import FastAPI, HTTPException
 from fastapi.testclient import TestClient
+import pytest
 
 from qwenpaw.app.routers.codex_subscription import router
+from qwenpaw.app.routers.providers import _validate_model_slot
 from qwenpaw.app.routers import router as api_router
 from qwenpaw.app.routers.provider_oauth import router as provider_oauth_router
 from qwenpaw.providers.codex_subscription.oauth import OAuthService
@@ -155,6 +157,18 @@ def test_image_model_settings_are_independent(tmp_path):
     assert response.json()["output_format"] == "webp"
     assert response.json()["count"] == 4
 
+    invalid = client.put(
+        path,
+        json={
+            "size": "1024x1024",
+            "quality": "auto",
+            "output_format": "jpeg",
+            "background": "transparent",
+            "count": 1,
+        },
+    )
+    assert invalid.status_code == 422
+
 
 def test_dedicated_oauth_route_precedes_generic_provider_route(tmp_path):
     """FastAPI resolves overlapping paths in registration order."""
@@ -177,3 +191,31 @@ def test_dedicated_oauth_route_precedes_generic_provider_route(tmp_path):
     )
     assert response.status_code == 200
     assert response.json()["manual_callback_supported"] is True
+
+
+def test_subscription_model_selection_requires_login_and_availability():
+    class Status:
+        connected = False
+
+        def status(self):
+            return {"connected": self.connected}
+
+    status = Status()
+    availability = "unknown"
+    provider = SimpleNamespace(
+        has_model=lambda model_id: model_id == "gpt-5.6-sol",
+        token_store=status,
+        availability=lambda model_id: availability,
+    )
+    manager = SimpleNamespace(get_provider=lambda provider_id: provider)
+
+    with pytest.raises(HTTPException, match="Sign in"):
+        _validate_model_slot(manager, "openai-codex", "gpt-5.6-sol")
+
+    status.connected = True
+    availability = "unavailable"
+    with pytest.raises(HTTPException, match="unavailable"):
+        _validate_model_slot(manager, "openai-codex", "gpt-5.6-sol")
+
+    availability = "available"
+    _validate_model_slot(manager, "openai-codex", "gpt-5.6-sol")

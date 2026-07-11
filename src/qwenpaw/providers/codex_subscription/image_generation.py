@@ -5,9 +5,7 @@ from __future__ import annotations
 import asyncio
 import base64
 import hashlib
-import ipaddress
 import io
-import socket
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -15,6 +13,8 @@ from urllib.parse import urlparse
 
 import httpx
 from PIL import Image
+
+from qwenpaw.utils.http import SSRFSafeRequestError, download_ssrf_safe
 
 from .catalog import record_model_availability
 from .errors import CodexSubscriptionError
@@ -47,12 +47,10 @@ class ImageGenerationService:
         token_store: TokenStore | None = None,
         oauth_service: OAuthService | None = None,
         http_client: CodexResponsesHTTPClient | None = None,
-        reference_client: httpx.AsyncClient | None = None,
     ) -> None:
         self.token_store = token_store or TokenStore()
         self.oauth_service = oauth_service or OAuthService(self.token_store)
         self.http_client = http_client or CodexResponsesHTTPClient()
-        self.reference_client = reference_client
 
     async def generate(
         self,
@@ -79,6 +77,11 @@ class ImageGenerationService:
             raise CodexSubscriptionError(
                 "CODEX_IMAGE_REFERENCES_INVALID",
                 "At most five reference images are supported",
+            )
+        if output_format == "jpeg" and background == "transparent":
+            raise CodexSubscriptionError(
+                "CODEX_IMAGE_OPTIONS_INVALID",
+                "JPEG output does not support a transparent background",
             )
 
         content: list[dict[str, Any]] = [
@@ -310,43 +313,14 @@ class ImageGenerationService:
                 "CODEX_IMAGE_REFERENCE_DENIED",
                 "Remote reference images must use HTTPS",
             )
-        addresses = await asyncio.to_thread(
-            socket.getaddrinfo, parsed.hostname, parsed.port or 443
-        )
-        for address in addresses:
-            ip = ipaddress.ip_address(address[4][0])
-            if not ip.is_global:
-                raise CodexSubscriptionError(
-                    "CODEX_IMAGE_REFERENCE_DENIED",
-                    "Remote reference resolved to a private address",
-                )
-        own = self.reference_client is None
-        client = self.reference_client or httpx.AsyncClient(
-            timeout=30, follow_redirects=False, trust_env=True
-        )
         try:
-            async with client.stream("GET", url) as response:
-                if response.status_code != 200:
-                    raise CodexSubscriptionError(
-                        "CODEX_IMAGE_REFERENCE_INVALID",
-                        "Remote reference image could not be downloaded",
-                    )
-                chunks = []
-                size = 0
-                async for chunk in response.aiter_bytes():
-                    size += len(chunk)
-                    if size > MAX_REFERENCE_BYTES:
-                        raise CodexSubscriptionError(
-                            "CODEX_IMAGE_REFERENCE_INVALID",
-                            "Remote reference image is too large",
-                        )
-                    chunks.append(chunk)
-                return b"".join(chunks)
-        except httpx.HTTPError as exc:
+            return await download_ssrf_safe(
+                url,
+                max_bytes=MAX_REFERENCE_BYTES,
+                allowed_schemes=frozenset({"https"}),
+            )
+        except SSRFSafeRequestError as exc:
             raise CodexSubscriptionError(
-                "CODEX_IMAGE_REFERENCE_INVALID",
-                "Remote reference image could not be downloaded",
+                "CODEX_IMAGE_REFERENCE_DENIED",
+                "Remote reference image was blocked by network policy",
             ) from exc
-        finally:
-            if own:
-                await client.aclose()

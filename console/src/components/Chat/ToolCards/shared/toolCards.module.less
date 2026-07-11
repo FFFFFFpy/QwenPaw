@@ -154,6 +154,25 @@
   min-width: 0;
 }
 
+.toolCallMediaGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  width: min(520px, calc(100% - 18px));
+  max-width: calc(100% - 18px);
+  margin: 6px 0 4px 18px;
+
+  .toolCallMediaPreview {
+    width: 100%;
+    max-width: 100%;
+    margin: 0;
+  }
+
+  .toolCallImage {
+    width: 100%;
+  }
+}
+
 .toolCallImage {
   display: block;
   width: 256px;

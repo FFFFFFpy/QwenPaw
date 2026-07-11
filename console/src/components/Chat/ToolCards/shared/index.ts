@@ -10,7 +10,7 @@ export {
   countLines,
   getFileLanguage,
   getFileExtFromPath,
-  getMediaInfo,
+  getMediaInfos,
   extractUrlFromText,
   formatMemorySearch,
   formatAgentList,

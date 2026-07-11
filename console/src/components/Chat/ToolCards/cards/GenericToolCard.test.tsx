@@ -22,16 +22,28 @@ describe("GenericToolCard", () => {
               },
               name: "generated.png",
             },
+            {
+              type: "data",
+              source: {
+                type: "url",
+                url: "file:///workspace/resources/generated-2.png",
+                media_type: "image/png",
+              },
+              name: "generated-2.png",
+            },
           ],
         }}
       />,
     );
 
-    const image = container.querySelector("img.ant-image-img");
+    const images = container.querySelectorAll("img.ant-image-img");
     const details = container.querySelector("details");
     expect(details).toHaveAttribute("open");
-    expect(image).not.toBeNull();
-    expect(image).toHaveAttribute(
+    expect(
+      container.querySelector("div[class*='toolCallMediaGrid']"),
+    ).not.toBeNull();
+    expect(images).toHaveLength(2);
+    expect(images[0]).toHaveAttribute(
       "src",
       expect.stringContaining(
         "/files/preview/workspace/resources/generated.png",

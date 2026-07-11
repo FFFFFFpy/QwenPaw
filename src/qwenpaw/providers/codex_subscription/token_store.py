@@ -20,6 +20,11 @@ from .errors import CodexSubscriptionError
 TOKEN_FORMAT_VERSION = 1
 REFRESH_SKEW_SECONDS = 300
 
+# Refresh coordination must span TokenStore instances.  Chat transports and
+# image generation are constructed independently in a few runtime paths, but
+# they still point at the same credential file and account.
+_REFRESH_LOCKS: dict[tuple[str, str], asyncio.Lock] = {}
+
 
 class TokenRecord(BaseModel):
     model_config = ConfigDict(repr=False, validate_assignment=True)
@@ -40,7 +45,10 @@ class TokenRecord(BaseModel):
 class TokenStore:
     def __init__(self, path: Path | None = None) -> None:
         self.path = path or SECRET_DIR / "codex_subscription" / "oauth.enc"
-        self._locks: dict[str, asyncio.Lock] = {}
+
+    def _refresh_lock(self, account_local_id: str) -> asyncio.Lock:
+        key = (str(self.path.expanduser().resolve()), account_local_id)
+        return _REFRESH_LOCKS.setdefault(key, asyncio.Lock())
 
     def load(self, account_local_id: str = "default") -> TokenRecord | None:
         if not self.path.exists():
@@ -121,7 +129,7 @@ class TokenStore:
             and record.expires_at > time.time() + REFRESH_SKEW_SECONDS
         ):
             return record
-        lock = self._locks.setdefault(record.account_local_id, asyncio.Lock())
+        lock = self._refresh_lock(record.account_local_id)
         async with lock:
             current = self.load(record.account_local_id)
             if current is None:

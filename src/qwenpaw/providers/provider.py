@@ -46,6 +46,12 @@ class ModelInfo(BaseModel):
         default=False,
         description="Whether this model is free to use (e.g., no API cost)",
     )
+    availability: (
+        Literal["unknown", "available", "unavailable"] | None
+    ) = Field(
+        default=None,
+        description="Runtime availability for providers that expose it.",
+    )
     max_tokens: int = Field(
         default=8192,
         ge=1,

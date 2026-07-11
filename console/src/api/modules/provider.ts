@@ -192,16 +192,17 @@ export const providerApi = {
 
   /* ---- Provider OAuth ---- */
 
-  startOAuth: (providerId: string) =>
+  startOAuth: (providerId: string, signal?: AbortSignal) =>
     request<{ authorize_url: string; state: string; flow_type: string }>(
       `/providers/${encodeURIComponent(providerId)}/oauth/start`,
-      { method: "POST" },
+      { method: "POST", signal },
     ),
 
-  getOAuthStatus: (providerId: string, state: string) =>
+  getOAuthStatus: (providerId: string, state: string, signal?: AbortSignal) =>
     request<{ status: string; error?: string }>(
       `/providers/${encodeURIComponent(
         providerId,
       )}/oauth/status?state=${encodeURIComponent(state)}`,
+      { signal },
     ),
 };

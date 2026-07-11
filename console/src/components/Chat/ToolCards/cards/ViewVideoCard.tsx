@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { VideoCameraOutlined } from "@ant-design/icons";
 import type { ToolCallContent } from "../shared/types";
 import { ToolCardShell, MediaPreview } from "../shared";
-import { shortFileName, getMediaInfo } from "../shared/utils";
+import { shortFileName, getMediaInfos } from "../shared/utils";
 
 export interface ViewVideoCardProps {
   content: ToolCallContent;
@@ -22,7 +22,7 @@ const ViewVideoCard: React.FC<ViewVideoCardProps> = ({
     ? t("tool.viewVideo", { file })
     : t("tool.viewVideoDefault");
 
-  const media = getMediaInfo(content);
+  const media = getMediaInfos(content)[0];
 
   return (
     <ToolCardShell

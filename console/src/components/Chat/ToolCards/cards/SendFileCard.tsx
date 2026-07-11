@@ -3,7 +3,7 @@ import { useTranslation } from "react-i18next";
 import { SendOutlined } from "@ant-design/icons";
 import type { ToolCallContent } from "../shared/types";
 import { ToolCardShell, MediaPreview } from "../shared";
-import { shortFileName, getMediaInfo } from "../shared/utils";
+import { shortFileName, getMediaInfos } from "../shared/utils";
 
 export interface SendFileCardProps {
   content: ToolCallContent;
@@ -36,7 +36,7 @@ const SendFileCard: React.FC<SendFileCardProps> = ({
     );
   }
 
-  const media = getMediaInfo(content);
+  const media = getMediaInfos(content)[0];
 
   return (
     <ToolCardShell

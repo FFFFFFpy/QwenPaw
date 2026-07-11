@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from .catalog import reasoning_options
 from .errors import CodexSubscriptionError
@@ -37,6 +37,14 @@ class ImageModelSettings(BaseModel):
         default="auto", pattern="^(auto|opaque|transparent)$"
     )
     count: int = Field(default=1, ge=1, le=4)
+
+    @model_validator(mode="after")
+    def validate_format_background(self) -> "ImageModelSettings":
+        if self.output_format == "jpeg" and self.background == "transparent":
+            raise ValueError(
+                "JPEG output does not support a transparent background"
+            )
+        return self
 
 
 def _default_chat_models() -> dict[str, ChatModelSettings]:
