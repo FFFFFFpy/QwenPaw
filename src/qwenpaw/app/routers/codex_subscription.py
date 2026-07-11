@@ -1,75 +1,85 @@
-"""Dedicated API for the built-in OpenAI Codex subscription provider."""
+"""API for QwenPaw's ChatGPT/Codex subscription compatibility provider."""
 
 from __future__ import annotations
 
-from typing import Any, Literal, NoReturn
+from typing import NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 
 from qwenpaw.constant import SECRET_DIR
-from qwenpaw.providers.codex_subscription.auth_service import (
-    CodexAccountStatus,
-    LoginStartResult,
-    LoginStatus,
+from qwenpaw.providers.codex_subscription.catalog import (
+    COMPACTION_THRESHOLD,
+    COMPACTION_TRIGGER_TOKENS,
+    MAX_OUTPUT_TOKENS,
+    WORK_CONTEXT_TOKENS,
 )
 from qwenpaw.providers.codex_subscription.errors import CodexSubscriptionError
 from qwenpaw.providers.codex_subscription.provider import (
     CodexSubscriptionProvider,
 )
-from qwenpaw.providers.codex_subscription.rate_limits import CodexRateLimits
-from qwenpaw.providers.codex_subscription.runtime import RuntimeState
 from qwenpaw.providers.codex_subscription.settings import (
     CodexSubscriptionSettings,
-    discover_codex_binary,
+    direct_transport_enabled,
 )
 from qwenpaw.providers.provider import ModelInfo
 from qwenpaw.providers.provider_manager import ProviderManager
 
 router = APIRouter(
-    prefix="/providers/openai-codex",
-    tags=["openai-codex-subscription"],
+    prefix="/providers/openai-codex", tags=["openai-codex-subscription"]
 )
 
 
-class RuntimeStatusResponse(BaseModel):
+class OAuthStartResponse(BaseModel):
+    authorize_url: str
     state: str
-    installed: bool
-    binary_path: str | None = None
-    binary_version: str | None = None
-    generation_id: str | None = None
-    capabilities: dict[str, Any] | None = None
-    error_code: str | None = None
-    message: str | None = None
+    expires_in: int
+    manual_callback_supported: bool
+    redirect_uri: str
 
 
-class LoginStartRequest(BaseModel):
-    flow: Literal["browser", "device_code"] = "browser"
+class OAuthCompleteRequest(BaseModel):
+    callback_url: str | None = Field(default=None, max_length=8192)
+    code: str | None = Field(default=None, max_length=4096)
+    state: str | None = Field(default=None, max_length=512)
 
 
-class CancelLoginRequest(BaseModel):
-    state: str = Field(min_length=1, max_length=256)
+class AccountResponse(BaseModel):
+    connected: bool
+    status: str
+    email_masked: str | None = None
+    display_name: str | None = None
+    expires_at: int | None = None
 
 
-class ModelsRefreshResponse(BaseModel):
+class ModelsResponse(BaseModel):
     models: list[ModelInfo]
-    stale: bool
+    source: str = "subscription_catalog"
+    availability: dict[str, str] = Field(
+        default_factory=lambda: {
+            "gpt-5.6-sol": "unknown_until_validated",
+            "gpt-5.6-terra": "unknown_until_validated",
+            "gpt-5.6-luna": "unknown_until_validated",
+        }
+    )
+    context_size: int = WORK_CONTEXT_TOKENS
+    compact_threshold: float = COMPACTION_THRESHOLD
+    compact_trigger: int = COMPACTION_TRIGGER_TOKENS
+    max_output_tokens: int = MAX_OUTPUT_TOKENS
 
 
 class SettingsResponse(BaseModel):
-    binary_path: str
-    preferred_login_flow: Literal["browser", "device_code"]
-    tool_wait_timeout_seconds: float
+    transport: str
+    reasoning_effort: str | None
+    relay_reasoning: bool
+    context_size: int
+    compact_threshold: float
+    direct_enabled: bool
 
 
 class SettingsUpdateRequest(BaseModel):
-    binary_path: str | None = None
-    preferred_login_flow: Literal["browser", "device_code"] | None = None
-    tool_wait_timeout_seconds: float | None = Field(
-        default=None,
-        gt=0,
-        le=3600,
-    )
+    reasoning_effort: str | None = None
+    relay_reasoning: bool | None = None
 
 
 async def _manager(request: Request) -> ProviderManager:
@@ -83,22 +93,16 @@ def _provider(manager: ProviderManager) -> CodexSubscriptionProvider:
             status_code=404,
             detail={
                 "code": "CODEX_PROVIDER_DISABLED",
-                "message": "OpenAI Codex subscription provider is disabled",
+                "message": "ChatGPT subscription provider is disabled",
             },
         )
     return provider
 
 
 def _raise_http(exc: CodexSubscriptionError) -> NoReturn:
-    status = (
+    status = exc.status_code or (
         503
-        if exc.error_code
-        in {
-            "CODEX_NOT_INSTALLED",
-            "CODEX_RUNTIME_START_FAILED",
-            "CODEX_RUNTIME_CRASHED",
-            "CODEX_PROTOCOL_INCOMPATIBLE",
-        }
+        if exc.error_code in {"CODEX_PROTOCOL_INCOMPATIBLE", "CODEX_NETWORK"}
         else 400
     )
     raise HTTPException(
@@ -111,154 +115,145 @@ def _raise_http(exc: CodexSubscriptionError) -> NoReturn:
     ) from exc
 
 
-@router.get("/runtime", response_model=RuntimeStatusResponse)
-async def runtime_status(
+@router.get("/account", response_model=AccountResponse)
+async def account_read(
     manager: ProviderManager = Depends(_manager),
-) -> RuntimeStatusResponse:
-    provider = _provider(manager)
-    runtime = provider.runtime
-    error: CodexSubscriptionError | None = None
-    if runtime.state is not RuntimeState.READY:
-        try:
-            await runtime.start()
-        except CodexSubscriptionError as exc:
-            error = exc
-    capabilities = runtime.capabilities
-    return RuntimeStatusResponse(
-        state=runtime.state.value,
-        installed=runtime.state is not RuntimeState.NOT_INSTALLED,
-        binary_path=runtime.binary_path,
-        binary_version=runtime.binary_version,
-        generation_id=runtime.generation_id or None,
-        capabilities=capabilities.model_dump() if capabilities else None,
-        error_code=error.error_code if error else None,
-        message=str(error) if error else None,
+) -> AccountResponse:
+    return AccountResponse.model_validate(
+        _provider(manager).token_store.status()
     )
 
 
-@router.post("/runtime/redetect", response_model=RuntimeStatusResponse)
-async def runtime_redetect(
-    manager: ProviderManager = Depends(_manager),
-) -> RuntimeStatusResponse:
-    provider = _provider(manager)
-    try:
-        await provider.runtime.redetect()
-    except CodexSubscriptionError:
-        pass
-    return await runtime_status(manager)
-
-
-@router.get("/account", response_model=CodexAccountStatus)
-async def account_read(
-    manager: ProviderManager = Depends(_manager),
-) -> CodexAccountStatus:
-    try:
-        return await _provider(manager).auth_service.read_account()
-    except CodexSubscriptionError as exc:
-        _raise_http(exc)
-
-
-@router.post("/oauth/start", response_model=LoginStartResult)
+@router.post("/oauth/start", response_model=OAuthStartResponse)
 async def oauth_start(
-    body: LoginStartRequest,
     manager: ProviderManager = Depends(_manager),
-) -> LoginStartResult:
+) -> OAuthStartResponse:
+    if not direct_transport_enabled():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "CODEX_COMPATIBILITY_PAUSED",
+                "message": "Subscription compatibility access is paused",
+            },
+        )
+    return OAuthStartResponse.model_validate(
+        _provider(manager).auth_service.start()
+    )
+
+
+@router.post("/oauth/complete", response_model=AccountResponse)
+async def oauth_complete(
+    body: OAuthCompleteRequest, manager: ProviderManager = Depends(_manager)
+) -> AccountResponse:
     try:
-        return await _provider(manager).auth_service.start_login(body.flow)
+        value = await _provider(manager).auth_service.complete(
+            callback_url=body.callback_url, code=body.code, state=body.state
+        )
+        return AccountResponse.model_validate(value)
     except CodexSubscriptionError as exc:
         _raise_http(exc)
 
 
-@router.get("/oauth/status", response_model=LoginStatus)
+@router.get("/oauth/status")
 async def oauth_status(
-    state: str,
-    manager: ProviderManager = Depends(_manager),
-) -> LoginStatus:
-    return await _provider(manager).auth_service.get_status(state)
-
-
-@router.post("/oauth/cancel", status_code=204)
-async def oauth_cancel(
-    body: CancelLoginRequest,
-    manager: ProviderManager = Depends(_manager),
-) -> None:
-    try:
-        await _provider(manager).auth_service.cancel_login(body.state)
-    except CodexSubscriptionError as exc:
-        _raise_http(exc)
+    state: str, manager: ProviderManager = Depends(_manager)
+) -> dict[str, object]:
+    return _provider(manager).auth_service.login_status(state)
 
 
 @router.post("/logout", status_code=204)
-async def logout(
+async def logout(manager: ProviderManager = Depends(_manager)) -> None:
+    _provider(manager).token_store.delete()
+
+
+@router.get("/models", response_model=ModelsResponse)
+async def models(
     manager: ProviderManager = Depends(_manager),
-) -> None:
-    try:
-        await _provider(manager).auth_service.logout()
-    except CodexSubscriptionError as exc:
-        _raise_http(exc)
+) -> ModelsResponse:
+    return ModelsResponse(
+        models=[
+            model.model_copy(deep=True) for model in _provider(manager).models
+        ]
+    )
 
 
-@router.get("/rate-limits", response_model=CodexRateLimits)
-async def rate_limits(
-    manager: ProviderManager = Depends(_manager),
-) -> CodexRateLimits:
-    try:
-        return await _provider(manager).rate_limit_service.read()
-    except CodexSubscriptionError as exc:
-        _raise_http(exc)
-
-
-@router.post("/models/refresh", response_model=ModelsRefreshResponse)
+@router.post("/models/refresh", response_model=ModelsResponse)
 async def models_refresh(
     manager: ProviderManager = Depends(_manager),
-) -> ModelsRefreshResponse:
+) -> ModelsResponse:
     provider = _provider(manager)
     try:
-        models = await provider.fetch_models()
-        manager.save_provider_config(provider.id, provider)
-        return ModelsRefreshResponse(
-            models=models,
-            stale=provider.model_catalog_stale,
-        )
+        return ModelsResponse(models=await provider.fetch_models())
     except CodexSubscriptionError as exc:
         _raise_http(exc)
+
+
+@router.get("/rate-limits")
+async def rate_limits(
+    manager: ProviderManager = Depends(_manager),
+) -> dict[str, object]:
+    _provider(manager)
+    return {
+        "available": False,
+        "message": "Provider did not return rate-limit details",
+    }
+
+
+@router.post("/validate")
+async def validate(
+    manager: ProviderManager = Depends(_manager),
+) -> dict[str, object]:
+    connected, message = await _provider(manager).check_connection()
+    return {"valid": connected, "message": message}
 
 
 @router.get("/settings", response_model=SettingsResponse)
 async def read_settings(
     manager: ProviderManager = Depends(_manager),
 ) -> SettingsResponse:
-    settings = _provider(manager).runtime.settings
+    settings = _provider(manager).settings
     return SettingsResponse(
-        binary_path=settings.binary_path,
-        preferred_login_flow=settings.preferred_login_flow,
-        tool_wait_timeout_seconds=settings.tool_wait_timeout_seconds,
+        **settings.model_dump(
+            include={
+                "transport",
+                "reasoning_effort",
+                "relay_reasoning",
+                "context_size",
+                "compact_threshold",
+            }
+        ),
+        direct_enabled=direct_transport_enabled(),
     )
 
 
 @router.put("/settings", response_model=SettingsResponse)
 async def update_settings(
-    body: SettingsUpdateRequest,
-    manager: ProviderManager = Depends(_manager),
+    body: SettingsUpdateRequest, manager: ProviderManager = Depends(_manager)
 ) -> SettingsResponse:
     provider = _provider(manager)
-    settings = provider.runtime.settings
-    updates = settings.model_dump()
-    if body.binary_path is not None:
-        path = body.binary_path.strip()
-        if path:
-            try:
-                path = discover_codex_binary(path)
-            except CodexSubscriptionError as exc:
-                _raise_http(exc)
-        updates["binary_path"] = path
-    if body.preferred_login_flow is not None:
-        updates["preferred_login_flow"] = body.preferred_login_flow
-    if body.tool_wait_timeout_seconds is not None:
-        updates["tool_wait_timeout_seconds"] = body.tool_wait_timeout_seconds
-    provider.runtime.settings = CodexSubscriptionSettings.model_validate(
-        updates
-    )
-    settings_path = SECRET_DIR / "codex_subscription" / "settings.json"
-    provider.runtime.settings.save(settings_path)
+    updates = provider.settings.model_dump()
+    if body.reasoning_effort is not None:
+        if body.reasoning_effort not in {
+            "auto",
+            "low",
+            "medium",
+            "high",
+            "xhigh",
+            "max",
+            "ultra",
+        }:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "code": "CODEX_REASONING_INVALID",
+                    "message": "Unsupported reasoning effort",
+                },
+            )
+        updates["reasoning_effort"] = (
+            None if body.reasoning_effort == "auto" else body.reasoning_effort
+        )
+    if body.relay_reasoning is not None:
+        updates["relay_reasoning"] = body.relay_reasoning
+    provider._settings = CodexSubscriptionSettings.model_validate(updates)
+    provider.settings.save(SECRET_DIR / "codex_subscription" / "settings.json")
     return await read_settings(manager)

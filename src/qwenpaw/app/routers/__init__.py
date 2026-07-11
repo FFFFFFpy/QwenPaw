@@ -64,8 +64,8 @@ router.include_router(backup_router)
 router.include_router(git_router)
 router.include_router(coding_project_router)
 router.include_router(access_control_router)
-router.include_router(provider_oauth_router)
 router.include_router(codex_subscription_router)
+router.include_router(provider_oauth_router)
 
 
 def create_agent_scoped_router() -> APIRouter:

@@ -1,210 +1,132 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Button, Modal } from "@agentscope-ai/design";
-import { Check, Copy, ExternalLink, Loader2 } from "lucide-react";
-import { useTranslation } from "react-i18next";
-import type {
-  CodexLoginFlow,
-  CodexLoginStart,
-} from "../../../../../api/types/codexSubscription";
+import { Button, Input, Modal } from "@agentscope-ai/design";
+import { Check, ExternalLink, Loader2 } from "lucide-react";
 import { codexSubscriptionApi } from "../../../../../api/modules/codexSubscription";
 import { openExternalLink } from "../../../../../utils/openExternalLink";
 import { useAppMessage } from "../../../../../hooks/useAppMessage";
 
 interface Props {
   open: boolean;
-  flow: CodexLoginFlow;
+  flow?: "browser";
   onConnected: () => void;
   onClose: () => void;
 }
 
-type Phase = "starting" | "waiting" | "connected" | "failed";
-
 export function CodexSubscriptionLoginModal({
   open,
-  flow,
   onConnected,
   onClose,
 }: Props) {
-  const { t } = useTranslation();
   const { message } = useAppMessage();
-  const [phase, setPhase] = useState<Phase>("starting");
-  const [login, setLogin] = useState<CodexLoginStart | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [secondsLeft, setSecondsLeft] = useState(0);
-  const pollRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const timerRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  const activeRef = useRef(false);
+  const [state, setState] = useState("");
+  const [callbackUrl, setCallbackUrl] = useState("");
+  const [phase, setPhase] = useState<
+    "starting" | "waiting" | "connected" | "failed"
+  >("starting");
+  const [error, setError] = useState("");
+  const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  const clearTimers = useCallback(() => {
-    if (pollRef.current) clearTimeout(pollRef.current);
-    if (timerRef.current) clearInterval(timerRef.current);
-    pollRef.current = null;
-    timerRef.current = null;
-  }, []);
+  const poll = useCallback(
+    (oauthState: string) => {
+      const run = async () => {
+        try {
+          const result = await codexSubscriptionApi.getLoginStatus(oauthState);
+          if (result.status === "completed") {
+            setPhase("connected");
+            message.success("ChatGPT 登录成功");
+            onConnected();
+            return;
+          }
+        } catch {
+          /* keep the active OAuth session */
+        }
+        timer.current = setTimeout(run, 1500);
+      };
+      timer.current = setTimeout(run, 1000);
+    },
+    [message, onConnected],
+  );
 
   useEffect(() => {
-    if (!open) {
-      activeRef.current = false;
-      clearTimers();
-      setLogin(null);
-      return;
-    }
-
-    activeRef.current = true;
+    if (!open) return;
     setPhase("starting");
-    setError(null);
+    setError("");
+    setCallbackUrl("");
     void codexSubscriptionApi
-      .startLogin(flow)
-      .then((result) => {
-        if (!activeRef.current) return;
-        setLogin(result);
+      .startLogin()
+      .then((login) => {
+        setState(login.state);
         setPhase("waiting");
-        setSecondsLeft(
-          Math.max(0, result.expires_at - Math.floor(Date.now() / 1000)),
+        openExternalLink(
+          login.authorize_url,
+          "_blank",
+          "popup,width=640,height=760",
         );
-        const url = result.authorize_url || result.verification_url;
-        if (url && flow === "browser") {
-          openExternalLink(url, "_blank", "popup,width=640,height=760");
-        }
+        poll(login.state);
       })
       .catch((reason: unknown) => {
-        if (!activeRef.current) return;
         setPhase("failed");
-        setError(
-          reason instanceof Error
-            ? reason.message
-            : t("models.codexSubscription.loginFailed"),
-        );
+        setError(reason instanceof Error ? reason.message : "无法开始登录");
       });
-
     return () => {
-      activeRef.current = false;
-      clearTimers();
+      if (timer.current) clearTimeout(timer.current);
     };
-  }, [open, flow, clearTimers, t]);
+  }, [open, poll]);
 
-  useEffect(() => {
-    if (!open || phase !== "waiting" || !login) return;
-    timerRef.current = setInterval(() => {
-      setSecondsLeft(
-        Math.max(0, login.expires_at - Math.floor(Date.now() / 1000)),
-      );
-    }, 1000);
-
-    const poll = async () => {
-      try {
-        const status = await codexSubscriptionApi.getLoginStatus(login.state);
-        if (!activeRef.current) return;
-        if (status.status === "completed") {
-          clearTimers();
-          setPhase("connected");
-          message.success(t("models.codexSubscription.connected"));
-          onConnected();
-          return;
-        }
-        if (["failed", "expired", "cancelled"].includes(status.status)) {
-          clearTimers();
-          setPhase("failed");
-          setError(status.error || t("models.codexSubscription.loginFailed"));
-          return;
-        }
-      } catch {
-        // A transient poll failure must not discard an active login session.
-      }
-      if (activeRef.current) pollRef.current = setTimeout(poll, 2000);
-    };
-    pollRef.current = setTimeout(poll, 1000);
-    return clearTimers;
-  }, [open, phase, login, clearTimers, message, onConnected, t]);
-
-  const cancel = useCallback(async () => {
-    activeRef.current = false;
-    clearTimers();
-    if (login && phase === "waiting") {
-      try {
-        await codexSubscriptionApi.cancelLogin(login.state);
-      } catch {
-        // Closing the modal is still safe if the cancellation RPC races expiry.
-      }
+  const completeManual = async () => {
+    try {
+      await codexSubscriptionApi.completeLogin({
+        callback_url: callbackUrl,
+        state,
+      });
+      setPhase("connected");
+      message.success("ChatGPT 登录成功");
+      onConnected();
+    } catch (reason) {
+      setPhase("failed");
+      setError(reason instanceof Error ? reason.message : "无法完成登录");
     }
-    onClose();
-  }, [clearTimers, login, onClose, phase]);
-
-  const copyCode = async () => {
-    if (!login?.user_code) return;
-    await navigator.clipboard.writeText(login.user_code);
-    message.success(t("models.codexSubscription.codeCopied"));
   };
 
-  const verificationUrl = login?.verification_url;
-
   return (
-    <Modal open={open} onCancel={cancel} footer={null} width={440}>
-      <div style={{ textAlign: "center", padding: "20px 8px 8px" }}>
+    <Modal open={open} onCancel={onClose} footer={null} width={520}>
+      <div style={{ padding: 16, textAlign: "center" }}>
         {phase === "connected" ? (
-          <Check size={38} color="#22c55e" />
+          <Check size={36} color="#22c55e" />
         ) : (
-          <Loader2
-            size={34}
-            style={{ color: "#6366f1", animation: "spin 1s linear infinite" }}
-          />
+          <Loader2 size={34} style={{ animation: "spin 1s linear infinite" }} />
         )}
-        <h3 style={{ margin: "14px 0 8px" }}>
-          {t(
-            phase === "starting"
-              ? "models.codexSubscription.startingLogin"
-              : phase === "failed"
-              ? "models.codexSubscription.loginFailed"
-              : "models.codexSubscription.waitingLogin",
-          )}
-        </h3>
-
-        {flow === "device_code" && phase === "waiting" && login && (
+        <h3>登录 ChatGPT</h3>
+        <p>
+          浏览器授权后会自动返回 QwenPaw。若浏览器与 QwenPaw
+          不在同一台机器，localhost 页面无法打开属于正常情况。
+        </p>
+        {phase !== "connected" && (
           <>
-            <p style={{ color: "var(--text-secondary)" }}>
-              {t("models.codexSubscription.deviceInstructions")}
-            </p>
-            <div
-              style={{
-                fontSize: 26,
-                fontWeight: 700,
-                letterSpacing: 3,
-                margin: "16px 0",
-              }}
+            <p>请复制浏览器地址栏中的完整 callback URL 并粘贴到此处：</p>
+            <Input
+              value={callbackUrl}
+              onChange={(event) => setCallbackUrl(event.target.value)}
+              placeholder="http://localhost:1455/auth/callback?code=...&state=..."
+            />
+            <Button
+              type="primary"
+              disabled={!callbackUrl.trim()}
+              onClick={completeManual}
+              style={{ marginTop: 12 }}
             >
-              {login.user_code}
-            </div>
-            <div style={{ display: "flex", gap: 8, justifyContent: "center" }}>
-              <Button icon={<Copy size={15} />} onClick={copyCode}>
-                {t("models.codexSubscription.copyCode")}
-              </Button>
-              <Button
-                type="primary"
-                icon={<ExternalLink size={15} />}
-                onClick={() =>
-                  verificationUrl && openExternalLink(verificationUrl, "_blank")
-                }
-              >
-                {t("models.codexSubscription.openBrowser")}
-              </Button>
-            </div>
-            <p style={{ color: "var(--text-secondary)", marginTop: 14 }}>
-              {t("models.codexSubscription.expiresIn", {
-                seconds: secondsLeft,
-              })}
-            </p>
+              完成登录
+            </Button>
+            <Button
+              icon={<ExternalLink size={15} />}
+              onClick={onClose}
+              style={{ marginTop: 12, marginLeft: 8 }}
+            >
+              取消
+            </Button>
           </>
         )}
-
-        {flow === "browser" && phase === "waiting" && (
-          <p style={{ color: "var(--text-secondary)" }}>
-            {t("models.codexSubscription.browserInstructions")}
-          </p>
-        )}
         {error && <p style={{ color: "#ef4444" }}>{error}</p>}
-        <Button style={{ marginTop: 18 }} onClick={cancel}>
-          {t("common.cancel")}
-        </Button>
       </div>
     </Modal>
   );

@@ -1,4 +1,4 @@
-"""A marker credential: authentication remains owned by App Server."""
+"""Marker credential; OAuth secrets remain in the encrypted TokenStore."""
 
 from __future__ import annotations
 
@@ -9,10 +9,8 @@ from agentscope.model import ChatModelBase
 
 
 class CodexSubscriptionCredential(CredentialBase):
-    """Contains no token, API key, cookie, or authorization header."""
-
     @classmethod
     def get_chat_model_class(cls) -> Type[ChatModelBase]:
-        from .chat_model import CodexSubscriptionChatModel
+        from .chat_model import ChatGPTSubscriptionChatModel
 
-        return CodexSubscriptionChatModel
+        return ChatGPTSubscriptionChatModel

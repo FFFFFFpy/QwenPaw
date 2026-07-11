@@ -38,7 +38,7 @@ class ErrorNormalizeHook(LifecycleHook):
                         _m,
                         "name",
                         None,
-                    )
+                    ) or getattr(_m, "model", None)
         except Exception:
             pass
 

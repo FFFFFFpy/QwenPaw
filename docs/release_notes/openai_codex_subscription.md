@@ -1,17 +1,16 @@
-# Release note: OpenAI Codex subscription provider
+# Release note: ChatGPT/Codex subscription direct transport
 
-QwenPaw now includes **OpenAI Codex** as a built-in cloud-subscription
-provider. Users can connect an eligible ChatGPT account with the official
-Codex App Server, discover account models, view usage windows, select reasoning
-effort, send image inputs, stream responses, cancel turns, and use QwenPaw tools
-through the dynamic-tool bridge.
+ChatGPT/Codex subscription is integrated as a QwenPaw-native ChatModel
+through a compatibility Responses transport. QwenPaw remains the sole
+agent runtime.
 
-Authentication remains entirely within the official App Server. QwenPaw does
-not store ChatGPT OAuth tokens or read Codex authentication files. The feature
-can be rolled back independently with
-`QWENPAW_CODEX_SUBSCRIPTION_ENABLED=false`.
+The provider supports PKCE login (including a manually pasted cross-machine
+callback), encrypted refresh-token storage, direct text/reasoning/tool SSE,
+structured output and images, account-scoped model errors, and the fixed 256K
+QwenPaw context policy. The old App Server inference, thread/turn lifecycle,
+dynamic-tool bridge and XML history mapper are removed.
 
-Known limitation: dynamic tools depend on the installed App Server's
-experimental protocol capability. Browser and device-code login availability
-can also be restricted by ChatGPT workspace policy.
-
+This uses a non-public ChatGPT/Codex backend compatibility route, not the
+OpenAI Platform public stable API. Upstream changes can require a QwenPaw
+compatibility update. Emergency pause:
+`QWENPAW_OPENAI_CODEX_DIRECT_ENABLED=false`.

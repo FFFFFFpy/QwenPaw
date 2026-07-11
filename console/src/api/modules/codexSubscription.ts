@@ -1,12 +1,10 @@
 import { request } from "../request";
 import type {
   CodexAccountStatus,
-  CodexLoginFlow,
   CodexLoginStart,
   CodexLoginStatus,
   CodexModelsRefresh,
   CodexRateLimits,
-  CodexRuntimeStatus,
   CodexSubscriptionSettings,
   CodexSubscriptionSettingsUpdate,
 } from "../types/codexSubscription";
@@ -14,30 +12,29 @@ import type {
 const base = "/providers/openai-codex";
 
 export const codexSubscriptionApi = {
-  getRuntime: () => request<CodexRuntimeStatus>(`${base}/runtime`),
-  redetectRuntime: () =>
-    request<CodexRuntimeStatus>(`${base}/runtime/redetect`, {
-      method: "POST",
-    }),
   getAccount: () => request<CodexAccountStatus>(`${base}/account`),
-  startLogin: (flow: CodexLoginFlow) =>
-    request<CodexLoginStart>(`${base}/oauth/start`, {
+  startLogin: () =>
+    request<CodexLoginStart>(`${base}/oauth/start`, { method: "POST" }),
+  completeLogin: (body: {
+    callback_url?: string;
+    code?: string;
+    state?: string;
+  }) =>
+    request<CodexAccountStatus>(`${base}/oauth/complete`, {
       method: "POST",
-      body: JSON.stringify({ flow }),
+      body: JSON.stringify(body),
     }),
   getLoginStatus: (state: string) =>
     request<CodexLoginStatus>(
       `${base}/oauth/status?state=${encodeURIComponent(state)}`,
     ),
-  cancelLogin: (state: string) =>
-    request<void>(`${base}/oauth/cancel`, {
-      method: "POST",
-      body: JSON.stringify({ state }),
-    }),
   logout: () => request<void>(`${base}/logout`, { method: "POST" }),
   getRateLimits: () => request<CodexRateLimits>(`${base}/rate-limits`),
+  getModels: () => request<CodexModelsRefresh>(`${base}/models`),
   refreshModels: () =>
-    request<CodexModelsRefresh>(`${base}/models/refresh`, {
+    request<CodexModelsRefresh>(`${base}/models/refresh`, { method: "POST" }),
+  validate: () =>
+    request<{ valid: boolean; message: string }>(`${base}/validate`, {
       method: "POST",
     }),
   getSettings: () => request<CodexSubscriptionSettings>(`${base}/settings`),

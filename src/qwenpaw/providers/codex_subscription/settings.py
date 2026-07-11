@@ -1,12 +1,10 @@
-"""Non-secret Codex subscription settings and binary discovery."""
+"""Non-secret settings for the ChatGPT/Codex compatibility transport."""
 
 from __future__ import annotations
 
 import json
 import os
 from pathlib import Path
-import shutil
-from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,17 +12,17 @@ from .errors import CodexSubscriptionError
 
 
 class CodexSubscriptionSettings(BaseModel):
-    """Persisted settings. This model must never gain credential fields."""
+    """Persisted settings. Credentials must never be added to this model."""
 
-    model_config = ConfigDict(extra="forbid")
+    model_config = ConfigDict(extra="ignore")
 
-    binary_path: str = ""
-    preferred_login_flow: Literal["browser", "device_code"] = "browser"
-    client_name: str = "qwenpaw"
-    schema_cache_version: int = 1
-    request_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
-    tool_wait_timeout_seconds: float = Field(default=600.0, gt=0, le=3600)
-    max_message_bytes: int = Field(default=4 * 1024 * 1024, ge=65536)
+    transport: str = "direct"
+    reasoning_effort: str | None = None
+    relay_reasoning: bool = True
+    context_size: int = Field(default=262_144, ge=1_000)
+    compact_threshold: float = Field(default=0.90, gt=0, le=1)
+    request_timeout_seconds: float = Field(default=600.0, gt=0, le=3600)
+    max_request_bytes: int = Field(default=16 * 1024 * 1024, ge=65_536)
 
     @classmethod
     def load(cls, path: Path) -> "CodexSubscriptionSettings":
@@ -35,50 +33,27 @@ class CodexSubscriptionSettings(BaseModel):
             return cls.model_validate(payload)
         except (OSError, ValueError) as exc:
             raise CodexSubscriptionError(
-                "CODEX_BINARY_INVALID",
-                "Codex subscription settings are invalid",
+                "CODEX_PROTOCOL_INCOMPATIBLE",
+                "ChatGPT subscription settings are invalid",
             ) from exc
 
     def save(self, path: Path) -> None:
-        path.parent.mkdir(parents=True, exist_ok=True)
+        path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
         temporary = path.with_suffix(path.suffix + ".tmp")
-        temporary.write_text(
-            json.dumps(self.model_dump(), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        try:
-            os.chmod(temporary, 0o600)
-        except OSError:
-            pass
+        with temporary.open("w", encoding="utf-8") as handle:
+            json.dump(self.model_dump(), handle, ensure_ascii=False, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.chmod(temporary, 0o600)
         os.replace(temporary, path)
 
 
-def discover_codex_binary(custom_path: str | None = None) -> str:
-    """Resolve a user-selected or PATH Codex binary to an executable path."""
-
-    if custom_path:
-        candidate = Path(custom_path).expanduser()
-        if not candidate.is_absolute():
-            raise CodexSubscriptionError(
-                "CODEX_BINARY_INVALID",
-                "The custom Codex binary path must be absolute",
-            )
-    else:
-        located = shutil.which("codex")
-        if not located:
-            raise CodexSubscriptionError(
-                "CODEX_NOT_INSTALLED",
-                "Codex CLI is not installed or is not on PATH",
-                remediation=(
-                    "Install the official Codex CLI, then retry detection."
-                ),
-            )
-        candidate = Path(located)
-
-    resolved = candidate.resolve()
-    if not resolved.is_file() or not os.access(resolved, os.X_OK):
-        raise CodexSubscriptionError(
-            "CODEX_BINARY_INVALID",
-            "The configured Codex binary is not an executable file",
-        )
-    return str(resolved)
+def direct_transport_enabled() -> bool:
+    return os.getenv(
+        "QWENPAW_OPENAI_CODEX_DIRECT_ENABLED", "true"
+    ).lower() not in {
+        "0",
+        "false",
+        "no",
+        "off",
+    }
