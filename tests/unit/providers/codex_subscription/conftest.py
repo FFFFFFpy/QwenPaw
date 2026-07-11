@@ -92,10 +92,10 @@ class StubRuntime:
 
     async def wait_background_tasks(self) -> None:
         while self._background_tasks:
-            await asyncio.gather(
-                *tuple(self._background_tasks),
-                return_exceptions=True,
-            )
+            tasks = tuple(self._background_tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            self._background_tasks.difference_update(tasks)
+            await asyncio.sleep(0)
 
     def mark_turn_cleanup_failed(self, error: CodexSubscriptionError) -> None:
         self.turn_cleanup_error = error
