@@ -34,8 +34,7 @@ def test_state_is_random_single_use_and_expires(tmp_path):
     with pytest.raises(CodexSubscriptionError):
         service._consume(first["state"])
     service._pending[second["state"]].created_at = time.time() - 901
-    with pytest.raises(CodexSubscriptionError):
-        service._consume(second["state"])
+    assert service.login_status(second["state"])["status"] == "expired"
 
 
 @pytest.mark.asyncio
@@ -48,3 +47,19 @@ async def test_manual_callback_rejects_wrong_host(tmp_path):
                 "https://evil.example/auth/callback?code=x&state=" + state
             )
         )
+
+
+@pytest.mark.asyncio
+async def test_user_denial_records_failed_terminal_state(tmp_path):
+    service = OAuthService(TokenStore(tmp_path / "token.enc"))
+    state = service.start()["state"]
+    with pytest.raises(CodexSubscriptionError):
+        await service.complete(
+            callback_url=(
+                "http://localhost:1455/auth/callback?error=access_denied&state="
+                + state
+            )
+        )
+    status = service.login_status(state)
+    assert status["status"] == "failed"
+    assert status["error"]

@@ -30,6 +30,7 @@ class _PendingState:
     verifier: str
     created_at: float
     consumed: bool = False
+    error: str | None = None
 
 
 def create_code_verifier() -> str:
@@ -137,33 +138,47 @@ class OAuthService:
             query = parse_qs(parsed.query)
             code = code or (query.get("code") or [""])[0]
             state = state or (query.get("state") or [""])[0]
+            oauth_error = (query.get("error") or [""])[0]
+            if oauth_error and state:
+                self._consume(state)
+                self._results[state] = "failed"
+                raise CodexSubscriptionError(
+                    "CODEX_OAUTH_FAILED",
+                    "ChatGPT login was rejected",
+                )
         if not code or not state:
             raise CodexSubscriptionError(
                 "CODEX_OAUTH_STATE_INVALID",
                 "OAuth completion requires code and state",
             )
         pending = self._consume(state)
-        token_data = await self._token_request(
-            {
-                "grant_type": "authorization_code",
-                "client_id": OAUTH_CLIENT_ID,
-                "code": code,
-                "redirect_uri": OAUTH_REDIRECT_URI,
-                "code_verifier": pending.verifier,
-            },
-            form=True,
-        )
-        record = self._record_from_response(token_data)
-        self.store.save(record)
+        try:
+            token_data = await self._token_request(
+                {
+                    "grant_type": "authorization_code",
+                    "client_id": OAUTH_CLIENT_ID,
+                    "code": code,
+                    "redirect_uri": OAUTH_REDIRECT_URI,
+                    "code_verifier": pending.verifier,
+                },
+                form=True,
+            )
+            record = self._record_from_response(token_data)
+            self.store.save(record)
+        except CodexSubscriptionError as exc:
+            self._results[state] = "failed"
+            pending.error = str(exc)
+            raise
         self._results[state] = "completed"
         return self.store.status()
 
     def login_status(self, state: str) -> dict[str, object]:
+        self._sweep()
         status = self._results.get(state, "expired")
         return {
             "status": status,
             "account": self.store.status() if status == "completed" else None,
-            "error": None,
+            "error": ("ChatGPT login failed" if status == "failed" else None),
         }
 
     async def _listen_once(self) -> None:
@@ -348,6 +363,12 @@ class OAuthService:
 
     def _sweep(self) -> None:
         cutoff = time.time() - STATE_TTL_SECONDS
+        for key, value in self._pending.items():
+            if (
+                value.created_at <= cutoff
+                and self._results.get(key) == "pending"
+            ):
+                self._results[key] = "expired"
         self._pending = {
             key: value
             for key, value in self._pending.items()

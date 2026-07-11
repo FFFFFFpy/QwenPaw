@@ -59,6 +59,7 @@ class StreamPart:
     arguments: str = ""
     usage: dict[str, int] | None = None
     incomplete: bool = False
+    details: dict[str, Any] | None = None
 
 
 class ResponsesStreamParser:
@@ -133,9 +134,21 @@ class ResponsesStreamParser:
         elif event_type in {"response.completed", "response.incomplete"}:
             for key in self._order:
                 parts.extend(self._emit(key))
+            response = event.get("response")
+            incomplete_details = (
+                response.get("incomplete_details")
+                if isinstance(response, dict)
+                else event.get("incomplete_details")
+            )
             parts.append(
                 StreamPart(
-                    "completed", incomplete=event_type.endswith("incomplete")
+                    "completed",
+                    incomplete=event_type.endswith("incomplete"),
+                    details=(
+                        incomplete_details
+                        if isinstance(incomplete_details, dict)
+                        else None
+                    ),
                 )
             )
         elif event_type:

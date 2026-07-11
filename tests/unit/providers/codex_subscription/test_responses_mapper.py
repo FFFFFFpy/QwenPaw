@@ -1,3 +1,4 @@
+import pytest
 from agentscope.message import (
     AssistantMsg,
     Base64Source,
@@ -13,9 +14,13 @@ from agentscope.message import (
 from qwenpaw.providers.codex_subscription.responses_mapper import (
     ResponsesMapper,
 )
+from qwenpaw.providers.capping_formatter import (
+    _CappingOpenAIResponseFormatter,
+)
 
 
-def test_maps_messages_tools_images_without_xml():
+@pytest.mark.asyncio
+async def test_maps_messages_tools_images_without_xml():
     messages = [
         SystemMsg(name="system", content=[TextBlock(text="Be exact")]),
         UserMsg(
@@ -42,9 +47,10 @@ def test_maps_messages_tools_images_without_xml():
             content=[ToolResultBlock(id="call-1", name="lookup", output="ok")],
         ),
     ]
+    formatted = await _CappingOpenAIResponseFormatter().format(messages)
     body = ResponsesMapper().build_request(
         model="gpt-5.6-luna",
-        messages=messages,
+        input_items=formatted,
         tools=[
             {
                 "type": "function",
@@ -73,7 +79,7 @@ def test_maps_messages_tools_images_without_xml():
 def test_structured_format_and_auto_effort():
     body = ResponsesMapper().build_request(
         model="gpt-5.6-luna",
-        messages=[],
+        input_items=[],
         reasoning_effort="auto",
         structured_format={
             "type": "object",
@@ -84,3 +90,28 @@ def test_structured_format_and_auto_effort():
     assert body["reasoning"]["context"] == "all_turns"
     assert body["parallel_tool_calls"] is False
     assert body["text"]["format"]["type"] == "json_schema"
+
+
+@pytest.mark.asyncio
+async def test_formatter_preserves_tool_text_order_and_assistant_output_text():
+    formatted = await _CappingOpenAIResponseFormatter().format(
+        [
+            AssistantMsg(
+                name="assistant",
+                content=[
+                    ToolCallBlock(id="one", name="first", input="{}"),
+                    TextBlock(text="after"),
+                    ToolCallBlock(id="two", name="second", input="{}"),
+                ],
+            )
+        ]
+    )
+    assert [item.get("type", item.get("role")) for item in formatted] == [
+        "function_call",
+        "assistant",
+        "function_call",
+    ]
+    assert formatted[1]["content"][0] == {
+        "type": "output_text",
+        "text": "after",
+    }

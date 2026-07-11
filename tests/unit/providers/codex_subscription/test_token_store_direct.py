@@ -50,3 +50,29 @@ async def test_refresh_is_single_flight(tmp_path):
 
     await asyncio.gather(*(store.get_valid(refresh) for _ in range(8)))
     assert calls == 1
+
+
+@pytest.mark.asyncio
+async def test_concurrent_401_force_refresh_is_generation_aware(tmp_path):
+    store = TokenStore(tmp_path / "oauth.enc")
+    store.save(record(access_token="stale"))
+    calls = 0
+
+    async def refresh(current):
+        nonlocal calls
+        calls += 1
+        await asyncio.sleep(0.01)
+        current.access_token = "fresh"
+        return current
+
+    await asyncio.gather(
+        *(
+            store.get_valid(
+                refresh,
+                force_refresh=True,
+                stale_access_token="stale",
+            )
+            for _ in range(8)
+        )
+    )
+    assert calls == 1

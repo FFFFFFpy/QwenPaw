@@ -11,6 +11,7 @@ from agentscope.message import TextBlock, UserMsg
 from qwenpaw.providers.codex_subscription.chat_model import (
     ChatGPTSubscriptionChatModel,
 )
+from qwenpaw.providers.codex_subscription.errors import CodexSubscriptionError
 from qwenpaw.providers.codex_subscription.credential import (
     CodexSubscriptionCredential,
 )
@@ -101,7 +102,56 @@ async def test_direct_transport_with_local_sse_server(tmp_path):
     assert received["headers"]["authorization"] == "Bearer access"
     assert received["headers"]["chatgpt-account-id"] == "account"
     assert received["headers"]["originator"] == "codex_cli_rs"
-    assert received["headers"][
-        "x-openai-internal-codex-responses-lite"
-    ] == "true"
+    assert (
+        received["headers"]["x-openai-internal-codex-responses-lite"] == "true"
+    )
     assert received["body"]["reasoning"]["context"] == "all_turns"
+
+
+@pytest.mark.asyncio
+async def test_real_httpx_partial_body_disconnect_is_not_replayable(tmp_path):
+    async def handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ):
+        while await reader.readline() not in {b"\r\n", b"\n", b""}:
+            pass
+        sse = b'data: {"type":"response.output_text.delta","delta":"part"}\n\n'
+        writer.write(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\n"
+            b"Content-Length: 9999\r\nConnection: close\r\n\r\n" + sse
+        )
+        await writer.drain()
+        writer.close()
+
+    server = await asyncio.start_server(handler, "127.0.0.1", 0)
+    port = server.sockets[0].getsockname()[1]
+    store = TokenStore(tmp_path / "oauth.enc")
+    store.save(
+        TokenRecord(
+            account_local_id="default",
+            access_token="access",
+            refresh_token="refresh",
+            account_id="account",
+            expires_at=time.time() + 3600,
+            last_refresh_at=time.time(),
+        )
+    )
+    async with server, httpx.AsyncClient() as client:
+        model = ChatGPTSubscriptionChatModel(
+            credential=CodexSubscriptionCredential(id="test", name="test"),
+            model="gpt-5.6-luna",
+            parameters=ChatGPTSubscriptionChatModel.Parameters(),
+            token_store=store,
+            oauth_service=OAuthService(store),
+            http_client=CodexResponsesHTTPClient(
+                client=client,
+                endpoint=f"http://127.0.0.1:{port}/responses",
+                allow_development_endpoint=True,
+            ),
+        )
+        response = await model(
+            [UserMsg(name="user", content=[TextBlock(text="ping")])]
+        )
+        with pytest.raises(CodexSubscriptionError) as caught:
+            [chunk async for chunk in response]
+    assert caught.value.error_code == "CODEX_STREAM_REPLAY_UNSAFE"

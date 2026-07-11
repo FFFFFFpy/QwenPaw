@@ -10,9 +10,17 @@ COMPACTION_TRIGGER_TOKENS = 235_930
 MAX_OUTPUT_TOKENS = 131_072
 
 _EFFORTS = {
-    "gpt-5.6-sol": ["auto", "low", "medium", "high", "xhigh"],
-    "gpt-5.6-terra": ["auto", "low", "medium", "high", "xhigh", "max"],
-    "gpt-5.6-luna": ["auto", "low", "medium", "high", "xhigh", "max", "ultra"],
+    "gpt-5.6-sol": ["auto", "low", "medium", "high", "xhigh", "max", "ultra"],
+    "gpt-5.6-terra": [
+        "auto",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max",
+        "ultra",
+    ],
+    "gpt-5.6-luna": ["auto", "low", "medium", "high", "xhigh", "max"],
 }
 
 # GPT-5.6 is served through Codex's Responses Lite compatibility mode.  The

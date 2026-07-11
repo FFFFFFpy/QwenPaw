@@ -37,6 +37,16 @@ export function CodexSubscriptionLoginModal({
             onConnected();
             return;
           }
+          if (result.status === "failed" || result.status === "expired") {
+            setPhase("failed");
+            setError(
+              result.error ||
+                (result.status === "expired"
+                  ? "登录请求已过期，请重新开始"
+                  : "ChatGPT 登录失败"),
+            );
+            return;
+          }
         } catch {
           /* keep the active OAuth session */
         }

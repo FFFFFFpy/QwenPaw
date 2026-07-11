@@ -6,8 +6,8 @@ from collections.abc import AsyncGenerator
 import time
 from typing import Any
 
+import httpx
 from agentscope.credential import CredentialBase
-from agentscope.formatter import OpenAIResponseFormatter
 from agentscope.message import Msg, TextBlock, ThinkingBlock, ToolCallBlock
 from agentscope.model import (
     ChatModelBase,
@@ -17,7 +17,11 @@ from agentscope.model import (
 )
 from pydantic import BaseModel
 
-from .errors import CodexSubscriptionError
+from qwenpaw.providers.capping_formatter import (
+    _CappingOpenAIResponseFormatter,
+)
+
+from .errors import CodexSubscriptionError, CodexTransportError
 from .http_client import CodexResponsesHTTPClient
 from .oauth import OAuthService
 from .responses_mapper import ResponsesMapper
@@ -61,7 +65,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
             retry_delay=retry_delay,
             context_size=context_size,
         )
-        self.formatter = OpenAIResponseFormatter()
+        self.formatter = _CappingOpenAIResponseFormatter()
 
     async def _call_api(
         self,
@@ -77,9 +81,10 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
         structured = generate_kwargs.pop(
             "response_format", None
         ) or generate_kwargs.pop("structured_format", None)
+        formatted = await self.formatter.format(messages)
         body = self.mapper.build_request(
             model=model_name,
-            messages=messages,
+            input_items=formatted,
             tools=tools,
             tool_choice=tool_choice,
             reasoning_effort=effort,
@@ -110,7 +115,8 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
             record = await self.token_store.get_valid(
                 self.oauth_service.refresh
             )
-            emitted = False
+            emitted_any = False
+            emitted_tool_call = False
             usage: dict[str, int] | None = None
             parser = ResponsesStreamParser()
             completed = False
@@ -125,9 +131,16 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                             if part.kind == "usage":
                                 usage = part.usage
                             elif part.kind == "completed":
+                                if part.incomplete:
+                                    raise CodexSubscriptionError(
+                                        "CODEX_RESPONSE_INCOMPLETE",
+                                        "ChatGPT stopped before completing "
+                                        "the response",
+                                        details=part.details,
+                                    )
                                 completed = True
                             elif part.kind == "text" and part.text:
-                                emitted = True
+                                emitted_any = True
                                 yield ChatResponse(
                                     content=[TextBlock(text=part.text)],
                                     is_last=False,
@@ -137,7 +150,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                 and part.text
                                 and self.relay_reasoning
                             ):
-                                emitted = True
+                                emitted_any = True
                                 yield ChatResponse(
                                     content=[
                                         ThinkingBlock(thinking=part.text)
@@ -145,7 +158,8 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                     is_last=False,
                                 )
                             elif part.kind == "tool":
-                                emitted = True
+                                emitted_any = True
+                                emitted_tool_call = True
                                 yield ChatResponse(
                                     content=[
                                         ToolCallBlock(
@@ -157,7 +171,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                     is_last=False,
                                 )
                 if not completed:
-                    raise CodexSubscriptionError(
+                    raise CodexTransportError(
                         "CODEX_STREAM_DISCONNECTED",
                         "ChatGPT disconnected before completing the response",
                     )
@@ -177,17 +191,37 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                     finished_reason=FinishedReason.COMPLETED,
                 )
                 return
+            except httpx.HTTPError as exc:
+                if emitted_any or emitted_tool_call:
+                    raise CodexSubscriptionError(
+                        "CODEX_STREAM_REPLAY_UNSAFE",
+                        "ChatGPT stream was interrupted after output; "
+                        "retry disabled",
+                    ) from exc
+                raise CodexTransportError(
+                    "CODEX_NETWORK", "Unable to connect to ChatGPT"
+                ) from exc
             except CodexSubscriptionError as exc:
                 if (
                     exc.status_code == 401
                     and not refreshed_after_401
-                    and not emitted
+                    and not emitted_any
                 ):
                     await self.token_store.get_valid(
-                        self.oauth_service.refresh, force_refresh=True
+                        self.oauth_service.refresh,
+                        force_refresh=True,
+                        stale_access_token=(
+                            record.access_token.get_secret_value()
+                        ),
                     )
                     refreshed_after_401 = True
                     continue
+                if (emitted_any or emitted_tool_call) and exc.retryable:
+                    raise CodexSubscriptionError(
+                        "CODEX_STREAM_REPLAY_UNSAFE",
+                        "ChatGPT stream was interrupted after output; "
+                        "retry disabled",
+                    ) from exc
                 raise
 
 

@@ -6,6 +6,20 @@ from qwenpaw.providers.codex_subscription.stream_parser import (
 )
 
 
+def test_incomplete_keeps_details_and_is_not_completed_successfully():
+    parser = ResponsesStreamParser()
+    parts = parser.feed(
+        {
+            "type": "response.incomplete",
+            "response": {
+                "incomplete_details": {"reason": "max_output_tokens"}
+            },
+        }
+    )
+    assert parts[0].incomplete is True
+    assert parts[0].details == {"reason": "max_output_tokens"}
+
+
 async def lines():
     for value in [
         ": keepalive",

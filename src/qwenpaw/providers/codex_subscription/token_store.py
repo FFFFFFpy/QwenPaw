@@ -108,6 +108,7 @@ class TokenStore:
         refresher: Callable[[TokenRecord], Awaitable[TokenRecord]],
         *,
         force_refresh: bool = False,
+        stale_access_token: str | None = None,
     ) -> TokenRecord:
         record = self.load()
         if record is None or record.needs_login:
@@ -131,6 +132,13 @@ class TokenStore:
             if (
                 not force_refresh
                 and current.expires_at > time.time() + REFRESH_SKEW_SECONDS
+            ):
+                return current
+            if (
+                force_refresh
+                and stale_access_token is not None
+                and current.access_token.get_secret_value()
+                != stale_access_token
             ):
                 return current
             refreshed = await refresher(current)

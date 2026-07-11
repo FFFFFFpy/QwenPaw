@@ -45,7 +45,17 @@ from agentscope.formatter import (
 )
 
 from agentscope.formatter import OpenAIResponseFormatter
-from agentscope.message import Base64Source, URLSource
+from agentscope.message import (
+    Base64Source,
+    DataBlock,
+    HintBlock,
+    Msg,
+    TextBlock,
+    ThinkingBlock,
+    ToolCallBlock,
+    ToolResultBlock,
+    URLSource,
+)
 from pydantic import Field
 
 # Maximum size (in bytes) of a local media file we are willing to inline as
@@ -252,3 +262,119 @@ class _CappingOpenAIResponseFormatter(
         return super()._format_image_source(
             self._local_source_to_base64(source),
         )
+
+    async def format(self, msgs: list[Msg]) -> list[dict[str, Any]]:
+        """Format Responses items without reordering mixed content/tools.
+
+        AgentScope's upstream formatter batches all function calls until the
+        end of a message.  A message containing ``tool, text`` is therefore
+        serialized as ``text, tool``.  QwenPaw histories can contain mixed
+        blocks, so flush each contiguous message-content run before emitting
+        the next top-level item.
+        """
+        self.assert_list_of_msgs(msgs)
+        items: list[dict[str, Any]] = []
+
+        for msg in msgs:
+            content: list[dict[str, Any]] = []
+
+            def flush_content() -> None:
+                if content:
+                    items.append({"role": msg.role, "content": list(content)})
+                    content.clear()
+
+            for block in msg.get_content_blocks():
+                if isinstance(block, TextBlock):
+                    content.append(
+                        {
+                            "type": (
+                                "output_text"
+                                if msg.role == "assistant"
+                                else "input_text"
+                            ),
+                            "text": block.text,
+                        }
+                    )
+                elif isinstance(block, DataBlock):
+                    formatted = self._format_response_data_block(block)
+                    if formatted is not None:
+                        content.append(formatted)
+                elif isinstance(block, HintBlock):
+                    flush_content()
+                    hint_blocks = (
+                        [TextBlock(text=block.hint)]
+                        if isinstance(block.hint, str)
+                        else block.hint
+                    )
+                    hint_content: list[dict[str, Any]] = []
+                    for hint in hint_blocks:
+                        if isinstance(hint, TextBlock):
+                            hint_content.append(
+                                {"type": "input_text", "text": hint.text}
+                            )
+                        elif isinstance(hint, DataBlock):
+                            formatted = self._format_response_data_block(hint)
+                            if formatted is not None:
+                                hint_content.append(formatted)
+                    if hint_content:
+                        items.append({"role": "user", "content": hint_content})
+                elif isinstance(block, ThinkingBlock):
+                    reasoning_id = getattr(block, "reasoning_item_id", None)
+                    if reasoning_id:
+                        flush_content()
+                        items.append(
+                            {
+                                "type": "reasoning",
+                                "id": reasoning_id,
+                                "summary": (
+                                    [
+                                        {
+                                            "type": "summary_text",
+                                            "text": block.thinking,
+                                        }
+                                    ]
+                                    if block.thinking
+                                    else []
+                                ),
+                                "content": [],
+                            }
+                        )
+                elif isinstance(block, ToolCallBlock):
+                    flush_content()
+                    items.append(
+                        {
+                            "type": "function_call",
+                            "call_id": block.id,
+                            "name": block.name,
+                            "arguments": block.input,
+                        }
+                    )
+                elif isinstance(block, ToolResultBlock):
+                    flush_content()
+                    textual, multimodal = self.convert_tool_result_to_string(
+                        block.output
+                    )
+                    items.append(
+                        {
+                            "type": "function_call_output",
+                            "call_id": block.id,
+                            "output": textual,
+                        }
+                    )
+                    promoted: list[dict[str, Any]] = []
+                    for result in multimodal:
+                        if isinstance(result, TextBlock):
+                            promoted.append(
+                                {"type": "input_text", "text": result.text}
+                            )
+                        elif isinstance(result, DataBlock):
+                            formatted = self._format_response_data_block(
+                                result
+                            )
+                            if formatted is not None:
+                                promoted.append(formatted)
+                    if promoted:
+                        items.append({"role": "user", "content": promoted})
+            flush_content()
+
+        return items

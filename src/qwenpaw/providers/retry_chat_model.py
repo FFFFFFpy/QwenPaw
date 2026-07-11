@@ -188,6 +188,9 @@ def _extract_status_code(exc: Exception) -> int | None:
 
 def _is_retryable(exc: Exception) -> bool:
     """Return *True* if *exc* should trigger a retry."""
+    explicit = getattr(exc, "retryable", None)
+    if explicit is not None:
+        return bool(explicit)
     retryable = (
         _get_openai_retryable()
         + _get_anthropic_retryable()

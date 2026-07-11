@@ -9,6 +9,8 @@ from qwenpaw.exceptions import ProviderError
 
 
 class CodexSubscriptionError(ProviderError):
+    retryable: bool | None = None
+
     def __init__(
         self,
         code: str,
@@ -37,7 +39,7 @@ class CodexProtocolError(CodexSubscriptionError):
 
 
 class CodexTransportError(CodexSubscriptionError):
-    pass
+    retryable = True
 
 
 def error_for_status(status: int) -> CodexSubscriptionError:

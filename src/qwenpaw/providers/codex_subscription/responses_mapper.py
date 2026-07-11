@@ -1,48 +1,27 @@
-"""Map AgentScope messages and tools to Codex Responses request objects."""
+"""Build the Codex compatibility envelope around formatted Responses items."""
 
 from __future__ import annotations
 
-import base64
 import json
 from typing import Any
 
-from agentscope.message import (
-    Base64Source,
-    DataBlock,
-    Msg,
-    TextBlock,
-    ThinkingBlock,
-    ToolCallBlock,
-    ToolResultBlock,
-    URLSource,
-)
-
 from .catalog import uses_responses_lite
 from .errors import CodexSubscriptionError
-
-ALLOWED_IMAGE_MIME_TYPES = {
-    "image/jpeg",
-    "image/png",
-    "image/gif",
-    "image/webp",
-}
 
 
 class ResponsesMapper:
     def __init__(
         self,
         *,
-        max_image_bytes: int = 8 * 1024 * 1024,
         max_request_bytes: int = 16 * 1024 * 1024,
     ) -> None:
-        self.max_image_bytes = max_image_bytes
         self.max_request_bytes = max_request_bytes
 
     def build_request(
         self,
         *,
         model: str,
-        messages: list[Msg],
+        input_items: list[dict[str, Any]],
         tools: list[dict[str, Any]] | None = None,
         tool_choice: Any = None,
         reasoning_effort: str | None = None,
@@ -52,59 +31,18 @@ class ResponsesMapper:
     ) -> dict[str, Any]:
         responses_lite = uses_responses_lite(model)
         instructions: list[str] = []
-        input_items: list[dict[str, Any]] = []
-        for message in messages:
-            if message.role == "system":
-                text = self._text(message.content)
-                if text:
-                    instructions.append(text)
+        request_input: list[dict[str, Any]] = []
+        for item in input_items:
+            if item.get("role") != "system":
+                request_input.append(item)
                 continue
-            content: list[dict[str, Any]] = []
-            for block in message.content:
-                if isinstance(block, TextBlock):
-                    content.append({"type": "input_text", "text": block.text})
-                elif isinstance(block, DataBlock):
-                    content.append(self._image(block))
-                elif isinstance(block, ThinkingBlock):
-                    # Summaries are display-only and are never replayed.
-                    continue
-                elif isinstance(block, ToolCallBlock):
-                    input_items.append(
-                        {
-                            "type": "function_call",
-                            "call_id": block.id,
-                            "name": block.name,
-                            "arguments": block.input,
-                        }
-                    )
-                elif isinstance(block, ToolResultBlock):
-                    input_items.append(
-                        {
-                            "type": "function_call_output",
-                            "call_id": block.id,
-                            "output": self._tool_output(block.output),
-                        }
-                    )
-                else:
-                    raise CodexSubscriptionError(
-                        "CODEX_UNSUPPORTED_MESSAGE",
-                        f"Unsupported message block: {type(block).__name__}",
-                    )
-            if content:
-                input_items.append(
-                    {
-                        "role": (
-                            "assistant"
-                            if message.role == "assistant"
-                            else "user"
-                        ),
-                        "content": content,
-                    }
-                )
+            for content in item.get("content", []):
+                if isinstance(content, dict) and content.get("text"):
+                    instructions.append(str(content["text"]))
         body: dict[str, Any] = {
             "model": model,
             "instructions": "\n\n".join(instructions),
-            "input": input_items,
+            "input": request_input,
             "stream": True,
             "store": False,
         }
@@ -145,48 +83,6 @@ class ResponsesMapper:
                 "CODEX_REQUEST_TOO_LARGE", "The ChatGPT request is too large"
             )
         return body
-
-    @staticmethod
-    def _text(content: list[Any]) -> str:
-        return "\n".join(
-            block.text for block in content if isinstance(block, TextBlock)
-        )
-
-    def _image(self, block: DataBlock) -> dict[str, Any]:
-        source = block.source
-        media_type = source.media_type.lower()
-        if media_type not in ALLOWED_IMAGE_MIME_TYPES:
-            raise CodexSubscriptionError(
-                "CODEX_UNSUPPORTED_IMAGE",
-                "Only JPEG, PNG, GIF, and WebP images are supported",
-            )
-        if isinstance(source, URLSource):
-            url = str(source.url)
-        elif isinstance(source, Base64Source):
-            try:
-                size = len(base64.b64decode(source.data, validate=True))
-            except ValueError as exc:
-                raise CodexSubscriptionError(
-                    "CODEX_UNSUPPORTED_IMAGE", "Image data is invalid"
-                ) from exc
-            if size > self.max_image_bytes:
-                raise CodexSubscriptionError(
-                    "CODEX_REQUEST_TOO_LARGE", "Image exceeds the 8 MiB limit"
-                )
-            url = f"data:{media_type};base64,{source.data}"
-        else:
-            raise CodexSubscriptionError(
-                "CODEX_UNSUPPORTED_IMAGE", "Image source is unsupported"
-            )
-        return {"type": "input_image", "image_url": url}
-
-    @staticmethod
-    def _tool_output(output: Any) -> str:
-        if isinstance(output, str):
-            return output
-        return "\n".join(
-            item.text for item in output if isinstance(item, TextBlock)
-        )
 
     @staticmethod
     def _tools(tools: list[dict[str, Any]]) -> list[dict[str, Any]]:

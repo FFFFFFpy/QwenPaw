@@ -11,7 +11,11 @@ import httpx
 from qwenpaw.__version__ import __version__
 
 from .catalog import uses_responses_lite
-from .errors import CodexSubscriptionError, error_for_status
+from .errors import (
+    CodexSubscriptionError,
+    CodexTransportError,
+    error_for_status,
+)
 
 CODEX_RESPONSES_COMPATIBILITY_ROUTE = True
 CODEX_RESPONSES_URL = "https://chatgpt.com/backend-api/codex/responses"
@@ -76,7 +80,7 @@ class CodexResponsesHTTPClient:
                     raise error_for_status(response.status_code)
                 yield response
         except httpx.HTTPError as exc:
-            raise CodexSubscriptionError(
+            raise CodexTransportError(
                 "CODEX_NETWORK", "Unable to connect to ChatGPT"
             ) from exc
         finally:
