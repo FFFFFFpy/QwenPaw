@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Structured capability detection from generated App Server schemas."""
 
 from __future__ import annotations
@@ -20,6 +21,7 @@ _CLIENT_RESPONSE_FILES = {
     "account/login/start": "v2/LoginAccountResponse.json",
     "account/logout": "v2/LogoutAccountResponse.json",
     "model/list": "v2/ModelListResponse.json",
+    "mcpServerStatus/list": "v2/ListMcpServerStatusResponse.json",
     "thread/start": "v2/ThreadStartResponse.json",
     "thread/unsubscribe": "v2/ThreadUnsubscribeResponse.json",
     "turn/start": "v2/TurnStartResponse.json",
@@ -35,6 +37,7 @@ _REQUIRED_METHODS = (
     ("request", "account/login/start"),
     ("request", "account/logout"),
     ("request", "model/list"),
+    ("request", "mcpServerStatus/list"),
     ("request", "thread/start"),
     ("request", "turn/start"),
     ("request", "turn/interrupt"),
@@ -145,7 +148,10 @@ class AppServerSchemaCatalog:
             _SERVER_RESPONSE_FILES,
         )
         return cls.from_documents(
-            **documents,
+            client_request=documents["client_request"],
+            client_notification=documents["client_notification"],
+            server_request=documents["server_request"],
+            server_notification=documents["server_notification"],
             client_responses=client_responses,
             server_responses=server_responses,
         )
@@ -201,7 +207,7 @@ class AppServerSchemaCatalog:
         surface: str = "request",
     ) -> bool:
         entry = self._entry(method, surface)
-        return bool(entry and _nodes_at(entry, _normalize_path(path)))
+        return bool(entry and _path_exists(entry, _normalize_path(path)))
 
     def supports_enum(
         self,
@@ -219,46 +225,27 @@ class AppServerSchemaCatalog:
             for node in _nodes_at(entry, _normalize_path(path))
         )
 
-    def supports_restricted_read_sandbox(self) -> tuple[bool, bool]:
-        entry = self._client_requests.get("thread/start")
+    def supports_type(
+        self,
+        method: str,
+        path: str | Iterable[str],
+        expected: str,
+        *,
+        surface: str = "request",
+    ) -> bool:
+        entry = self._entry(method, surface)
         if entry is None:
-            return False, False
-        for sandbox_node in _nodes_at(entry, ("sandbox",)):
-            for branch in _branches(sandbox_node, entry.definitions):
-                if not _node_supports_enum(
-                    branch,
-                    entry.definitions,
-                    ("type",),
-                    "readOnly",
-                ):
-                    continue
-                network_disabled = _node_supports_type(
-                    branch,
-                    entry.definitions,
-                    ("networkAccess",),
-                    "boolean",
-                )
-                for access in _nodes_at(
-                    _SchemaEntry(branch, entry.definitions),
-                    ("access",),
-                ):
-                    if not _node_supports_enum(
-                        access,
-                        entry.definitions,
-                        ("type",),
-                        "restricted",
-                    ):
-                        continue
-                    roots = _nodes_at(
-                        _SchemaEntry(access, entry.definitions),
-                        ("readableRoots",),
-                    )
-                    if any(
-                        _array_accepts_type(root, entry.definitions, "string")
-                        for root in roots
-                    ):
-                        return True, network_disabled
-        return False, False
+            return False
+        normalized = _normalize_path(path)
+        return any(
+            _schema_accepts_type(node, entry.definitions, expected)
+            for node in _nodes_at(entry, normalized)
+        )
+
+    def has_surface_method(self, method: str, surface: str) -> bool:
+        """Return whether a method exists on an explicit protocol surface."""
+
+        return self._entry(method, surface) is not None
 
     def _entry(self, method: str, surface: str) -> _SchemaEntry | None:
         if surface == "request":
@@ -289,8 +276,11 @@ class CodexCapabilities:
     dynamic_tool_namespace: bool
     turn_interrupt: bool
     thread_archive_or_unsubscribe: bool
-    restricted_read_sandbox: bool
-    network_disabled_sandbox: bool
+    thread_sandbox_mode: bool
+    turn_sandbox_policy: bool
+    sandbox_network_disable: bool
+    config_overrides: bool
+    tool_isolation_verified: bool
     runtime_workspace_roots: bool
     environments_field: bool
     command_approval_requests: bool
@@ -310,21 +300,26 @@ class CodexCapabilities:
         cls,
         catalog: AppServerSchemaCatalog,
     ) -> "CodexCapabilities":
-        restricted, network_disabled = (
-            catalog.supports_restricted_read_sandbox()
-        )
         browser_login = catalog.has_client_request(
-            "account/login/start"
+            "account/login/start",
         ) and catalog.supports_enum(
-            "account/login/start", ("type",), "chatgpt"
+            "account/login/start",
+            ("type",),
+            "chatgpt",
         )
         missing = [
             method
             for surface, method in _REQUIRED_METHODS
-            if catalog._entry(method, surface) is None
+            if not catalog.has_surface_method(method, surface)
         ]
         if not browser_login and "account/login/start" not in missing:
             missing.append("account/login/start[type=chatgpt]")
+        if not catalog.supports_field(
+            "mcpServerStatus/list",
+            "data",
+            surface="response",
+        ):
+            missing.append("mcpServerStatus/list[response.data]")
         missing_required_methods = tuple(missing)
         dynamic_request_fields = (
             "threadId",
@@ -337,7 +332,9 @@ class CodexCapabilities:
         return cls(
             browser_login=browser_login,
             device_code_login=catalog.supports_enum(
-                "account/login/start", ("type",), "chatgptDeviceCode"
+                "account/login/start",
+                ("type",),
+                "chatgptDeviceCode",
             ),
             model_list=catalog.has_client_request("model/list"),
             rate_limits=catalog.has_client_request("account/rateLimits/read"),
@@ -372,31 +369,48 @@ class CodexCapabilities:
                 catalog.has_client_request("thread/unsubscribe")
                 or catalog.has_client_request("thread/archive")
             ),
-            restricted_read_sandbox=restricted,
-            network_disabled_sandbox=network_disabled,
+            thread_sandbox_mode=catalog.supports_enum(
+                "thread/start",
+                "sandbox",
+                "read-only",
+            ),
+            turn_sandbox_policy=catalog.supports_enum(
+                "turn/start",
+                ("sandboxPolicy", "type"),
+                "readOnly",
+            ),
+            sandbox_network_disable=catalog.supports_type(
+                "turn/start",
+                ("sandboxPolicy", "networkAccess"),
+                "boolean",
+            ),
+            config_overrides=catalog.supports_type(
+                "thread/start",
+                "config",
+                "object",
+            ),
+            tool_isolation_verified=False,
             runtime_workspace_roots=catalog.supports_field(
-                "thread/start", ("runtimeWorkspaceRoots",)
+                "thread/start",
+                ("runtimeWorkspaceRoots",),
             ),
             environments_field=catalog.supports_field(
-                "thread/start", ("environments",)
+                "thread/start",
+                ("environments",),
             ),
             command_approval_requests=catalog.has_server_request(
-                "item/commandExecution/requestApproval"
+                "item/commandExecution/requestApproval",
             ),
             file_approval_requests=catalog.has_server_request(
-                "item/fileChange/requestApproval"
+                "item/fileChange/requestApproval",
             ),
             permission_approval_requests=catalog.has_server_request(
-                "item/permissions/requestApproval"
+                "item/permissions/requestApproval",
             ),
             mcp_approval_requests=catalog.has_server_request(
-                "mcpServer/elicitation/request"
+                "mcpServer/elicitation/request",
             ),
-            builtin_tools_disable_mode=(
-                "restricted-read+network-disabled"
-                if restricted and network_disabled
-                else None
-            ),
+            builtin_tools_disable_mode="thread-config-overrides",
             required_protocol_methods=not missing_required_methods,
             missing_required_methods=missing_required_methods,
             schema_fingerprint=catalog.fingerprint,
@@ -406,13 +420,10 @@ class CodexCapabilities:
     def focused_contract(
         cls,
         *,
-        restricted_read_sandbox: bool = True,
-        network_disabled_sandbox: bool | None = None,
+        tool_isolation_verified: bool = True,
     ) -> "CodexCapabilities":
         """Capabilities used by the protocol fake, not real detection."""
 
-        if network_disabled_sandbox is None:
-            network_disabled_sandbox = restricted_read_sandbox
         return cls(
             browser_login=True,
             device_code_login=True,
@@ -423,19 +434,18 @@ class CodexCapabilities:
             dynamic_tool_namespace=True,
             turn_interrupt=True,
             thread_archive_or_unsubscribe=True,
-            restricted_read_sandbox=restricted_read_sandbox,
-            network_disabled_sandbox=network_disabled_sandbox,
+            thread_sandbox_mode=True,
+            turn_sandbox_policy=True,
+            sandbox_network_disable=True,
+            config_overrides=True,
+            tool_isolation_verified=tool_isolation_verified,
             runtime_workspace_roots=True,
             environments_field=True,
             command_approval_requests=True,
             file_approval_requests=True,
             permission_approval_requests=True,
             mcp_approval_requests=True,
-            builtin_tools_disable_mode=(
-                "restricted-read+network-disabled"
-                if restricted_read_sandbox and network_disabled_sandbox
-                else None
-            ),
+            builtin_tools_disable_mode="thread-config-overrides",
             required_protocol_methods=True,
             missing_required_methods=(),
             schema_fingerprint="fake-contract",
@@ -451,46 +461,38 @@ class CodexCapabilities:
                 },
             )
         if not (
-            self.restricted_read_sandbox and self.network_disabled_sandbox
+            self.thread_sandbox_mode
+            and self.turn_sandbox_policy
+            and self.sandbox_network_disable
+            and self.config_overrides
+            and self.environments_field
         ):
             raise CodexSubscriptionError(
                 "CODEX_SANDBOX_UNSUPPORTED",
-                "The installed Codex App Server cannot restrict file reads "
-                "to QwenPaw's isolated workspace",
+                "The installed Codex App Server lacks the required sandbox "
+                "or environment-isolation protocol fields",
                 remediation=(
-                    "Upgrade the official Codex CLI to a version with "
-                    "restricted readable-root sandbox support."
+                    "Upgrade the official Codex CLI to a compatible version."
                 ),
             )
 
 
 def build_restricted_sandbox_policy(
     capabilities: CodexCapabilities,
-    temporary_cwd: str,
 ) -> dict[str, Any]:
-    """Build the only App Server sandbox policy accepted by QwenPaw."""
+    """Build the minimal schema-backed read-only turn policy."""
 
     if not (
-        capabilities.restricted_read_sandbox
-        and capabilities.network_disabled_sandbox
+        capabilities.turn_sandbox_policy
+        and capabilities.sandbox_network_disable
     ):
         raise CodexSubscriptionError(
             "CODEX_SANDBOX_UNSUPPORTED",
-            "Codex restricted readable-root sandbox support is required",
-        )
-    path = Path(temporary_cwd)
-    if not path.is_absolute():
-        raise CodexSubscriptionError(
-            "CODEX_PROTOCOL_INCOMPATIBLE",
-            "Codex isolated workspace path must be absolute",
+            "Codex read-only network-disabled sandbox support is required",
         )
     return {
         "type": "readOnly",
         "networkAccess": False,
-        "access": {
-            "type": "restricted",
-            "readableRoots": [str(path)],
-        },
     }
 
 
@@ -645,6 +647,29 @@ def _nodes_at(entry: _SchemaEntry, path: tuple[str, ...]) -> list[Schema]:
     return expanded
 
 
+def _path_exists(entry: _SchemaEntry, path: tuple[str, ...]) -> bool:
+    nodes = [entry.schema]
+    for index, segment in enumerate(path):
+        next_nodes: list[Schema] = []
+        for node in nodes:
+            for branch in _branches(node, entry.definitions):
+                properties = branch.get("properties")
+                if (
+                    not isinstance(properties, dict)
+                    or segment not in properties
+                ):
+                    continue
+                if index == len(path) - 1:
+                    return True
+                child = properties[segment]
+                if isinstance(child, dict):
+                    next_nodes.append(child)
+        nodes = next_nodes
+        if not nodes:
+            return False
+    return False
+
+
 def _enum_values(schema: Schema, definitions: Schema) -> list[Any]:
     values: list[Any] = []
     for branch in _branches(schema, definitions):
@@ -686,21 +711,15 @@ def _node_supports_type(
     return False
 
 
-def _array_accepts_type(
+def _schema_accepts_type(
     schema: Schema,
     definitions: Schema,
     expected: str,
 ) -> bool:
     for branch in _branches(schema, definitions):
-        if branch.get("type") != "array":
-            continue
-        items = branch.get("items")
-        if not isinstance(items, dict):
-            continue
-        for item in _branches(items, definitions):
-            value = item.get("type")
-            if value == expected or (
-                isinstance(value, list) and expected in value
-            ):
-                return True
+        value = branch.get("type")
+        if value == expected or (
+            isinstance(value, list) and expected in value
+        ):
+            return True
     return False

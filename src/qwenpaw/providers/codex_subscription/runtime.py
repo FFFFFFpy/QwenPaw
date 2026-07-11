@@ -1,9 +1,13 @@
+# -*- coding: utf-8 -*-
 """Lifecycle manager for the official local Codex App Server process."""
+
+# pylint: disable=too-many-branches,too-many-statements,try-except-raise
 
 from __future__ import annotations
 
 import asyncio
 from collections.abc import Coroutine
+from dataclasses import replace
 from enum import Enum
 import logging
 from pathlib import Path
@@ -11,7 +15,7 @@ import secrets
 import signal
 import subprocess
 import sys
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from qwenpaw.__version__ import __version__
 
@@ -27,6 +31,7 @@ from .schema_capabilities import (
     detect_binary_capabilities,
 )
 from .settings import CodexSubscriptionSettings, discover_codex_binary
+from .tool_bridge import get_tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -73,6 +78,7 @@ class CodexAppServerRuntime:
         self.binary_path: str | None = None
         self.binary_version: str | None = None
         self.generation_id = ""
+        self._mcp_server_names: tuple[str, ...] | None = None
 
     @property
     def state(self) -> RuntimeState:
@@ -165,12 +171,23 @@ class CodexAppServerRuntime:
                     )
                     self.binary_path = binary
                     self.binary_version = await self._read_binary_version(
-                        binary
+                        binary,
                     )
                     self.capabilities = (
                         self._provided_capabilities
                         or await detect_binary_capabilities(binary)
                     )
+                    if self._provided_capabilities is None:
+                        fingerprint = self.capabilities.schema_fingerprint
+                        verified_fingerprints = (
+                            self.settings.tool_isolation_verified_fingerprints
+                        )
+                        self.capabilities = replace(
+                            self.capabilities,
+                            tool_isolation_verified=(
+                                fingerprint in verified_fingerprints
+                            ),
+                        )
                     command: tuple[str, ...] = (
                         binary,
                         "app-server",
@@ -191,11 +208,12 @@ class CodexAppServerRuntime:
                     )
                 capabilities.validate_required_surface()
                 self.generation_id = secrets.token_hex(4)
+                self._mcp_server_names = None
                 subprocess_kwargs: dict[str, Any] = {}
                 if sys.platform == "win32":
-                    subprocess_kwargs["creationflags"] = (
-                        subprocess.CREATE_NEW_PROCESS_GROUP
-                    )
+                    subprocess_kwargs[
+                        "creationflags"
+                    ] = subprocess.CREATE_NEW_PROCESS_GROUP
                 self._process = await asyncio.create_subprocess_exec(
                     *command,
                     stdin=asyncio.subprocess.PIPE,
@@ -213,6 +231,7 @@ class CodexAppServerRuntime:
                     default_timeout=self.settings.request_timeout_seconds,
                 )
                 self._register_blocked_server_requests()
+                get_tool_registry(self).bind_generation()
                 self._rpc.start()
                 if self._process.stderr is not None:
                     self._stderr_task = asyncio.create_task(
@@ -321,6 +340,39 @@ class CodexAppServerRuntime:
             )
         await self._rpc.notify(method, params)
 
+    async def list_mcp_server_names(self) -> tuple[str, ...]:
+        """Return effective MCP server names without exposing tool payloads."""
+
+        if self._mcp_server_names is not None:
+            return self._mcp_server_names
+        names: set[str] = set()
+        cursor: str | None = None
+        for _ in range(100):
+            response = await self.request(
+                "mcpServerStatus/list",
+                {
+                    "cursor": cursor,
+                    "limit": 100,
+                    "detail": "toolsAndAuthOnly",
+                },
+            )
+            rows = response.get("data")
+            if not isinstance(rows, list):
+                raise CodexSubscriptionError(
+                    "CODEX_PROTOCOL_INCOMPATIBLE",
+                    "Codex returned an invalid MCP server inventory",
+                )
+            for row in rows:
+                name = row.get("name") if isinstance(row, dict) else None
+                if isinstance(name, str) and name:
+                    names.add(name)
+            next_cursor = response.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                break
+            cursor = next_cursor
+        self._mcp_server_names = tuple(sorted(names))
+        return self._mcp_server_names
+
     def subscribe(
         self,
         method: str,
@@ -420,6 +472,7 @@ class CodexAppServerRuntime:
                 await asyncio.gather(task, return_exceptions=True)
         self._stderr_task = None
         self._monitor_task = None
+        self._mcp_server_names = None
 
     @staticmethod
     async def _read_binary_version(binary: str) -> str | None:

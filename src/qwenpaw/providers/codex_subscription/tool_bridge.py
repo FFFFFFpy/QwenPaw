@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Bridge App Server dynamic tool requests to AgentScope tool blocks."""
 
 from __future__ import annotations
@@ -44,7 +45,8 @@ def format_dynamic_tools(tools: list[dict]) -> list[dict[str, Any]]:
             )
         description = function.get("description")
         parameters = function.get(
-            "parameters", function.get("inputSchema", {})
+            "parameters",
+            function.get("inputSchema", {}),
         )
         if not isinstance(parameters, dict):
             raise CodexSubscriptionError(
@@ -78,7 +80,7 @@ class ToolTurnBridge:
         self,
         *,
         thread_id: str,
-        turn_id: str,
+        turn_id: str | None,
         tool_names: set[str],
         event_queue: asyncio.Queue[tuple[str, dict[str, Any]]],
         timeout_seconds: float = 600.0,
@@ -92,12 +94,39 @@ class ToolTurnBridge:
         self.timeout_callback = timeout_callback
         self._pending: dict[str, _PendingCall] = {}
         self._app_ids: set[str] = set()
+        self._turn_id_ready = asyncio.Event()
+        if turn_id is not None:
+            self._turn_id_ready.set()
+        self._turn_start_error: CodexSubscriptionError | None = None
         self.terminal_error: CodexSubscriptionError | None = None
         self.closed = False
 
     @property
     def pending_ids(self) -> set[str]:
         return set(self._pending)
+
+    def bind_turn(self, turn_id: str) -> None:
+        """Bind a provisional bridge after turn/start returns."""
+
+        if self.closed or self._turn_start_error is not None:
+            raise CodexSubscriptionError(
+                "CODEX_CANCELLED",
+                "The provisional Codex tool bridge is no longer active",
+            )
+        if self.turn_id is not None and self.turn_id != turn_id:
+            raise CodexSubscriptionError(
+                "CODEX_PROTOCOL_INCOMPATIBLE",
+                "The Codex tool bridge was rebound to another turn",
+            )
+        self.turn_id = turn_id
+        self._turn_id_ready.set()
+
+    def fail_turn_start(self, error: CodexSubscriptionError) -> None:
+        """Release requests that arrived before a failed turn/start."""
+
+        self._turn_start_error = error
+        self.terminal_error = error
+        self._turn_id_ready.set()
 
     async def handle_server_request(
         self,
@@ -108,13 +137,23 @@ class ToolTurnBridge:
                 "CODEX_CANCELLED",
                 "The Codex tool turn is no longer active",
             )
-        if (
-            params.get("threadId") != self.thread_id
-            or params.get("turnId") != self.turn_id
-        ):
+        if params.get("threadId") != self.thread_id:
             raise CodexSubscriptionError(
                 "CODEX_BUILTIN_SIDE_EFFECT_BLOCKED",
                 "Rejected a cross-thread Codex tool request",
+            )
+        await self._turn_id_ready.wait()
+        if self._turn_start_error is not None:
+            raise self._turn_start_error
+        if self.closed:
+            raise CodexSubscriptionError(
+                "CODEX_CANCELLED",
+                "The Codex tool turn is no longer active",
+            )
+        if params.get("turnId") != self.turn_id:
+            raise CodexSubscriptionError(
+                "CODEX_BUILTIN_SIDE_EFFECT_BLOCKED",
+                "Rejected a cross-turn Codex tool request",
             )
         tool = params.get("tool")
         call_id = params.get("callId")
@@ -220,6 +259,7 @@ class ToolTurnBridge:
 
     def close(self) -> None:
         self.closed = True
+        self._turn_id_ready.set()
         for pending in list(self._pending.values()):
             if not pending.future.done():
                 pending.future.set_result(
@@ -248,22 +288,30 @@ class ToolBridgeRegistry:
     def active_count(self) -> int:
         return len(self._bridges)
 
+    def bind_generation(self) -> None:
+        """Install the global dynamic-tool route as soon as RPC exists."""
+
+        generation = self.runtime.generation_id
+        if self._registered_generation == generation:
+            return
+        for bridge in self._bridges.values():
+            bridge.close()
+        self._bridges.clear()
+        self.runtime.register_server_request("item/tool/call", self.route)
+        self._registered_generation = generation
+
     def add(self, bridge: ToolTurnBridge) -> None:
         if bridge.thread_id in self._bridges:
             raise CodexSubscriptionError(
                 "CODEX_PROTOCOL_INCOMPATIBLE",
                 "Duplicate active Codex thread",
             )
-        generation = self.runtime.generation_id
-        if self._registered_generation != generation:
-            self.runtime.register_server_request("item/tool/call", self._route)
-            self._registered_generation = generation
         self._bridges[bridge.thread_id] = bridge
 
     def remove(self, thread_id: str) -> None:
         self._bridges.pop(thread_id, None)
 
-    async def _route(self, params: dict[str, Any]) -> dict[str, Any]:
+    async def route(self, params: dict[str, Any]) -> dict[str, Any]:
         thread_id = params.get("threadId")
         bridge = (
             self._bridges.get(thread_id)
@@ -293,7 +341,7 @@ def _format_tool_result(block: ToolResultBlock) -> dict[str, Any]:
     prefix = "" if success else f"QwenPaw tool result ({state}): "
     if isinstance(block.output, str):
         content_items.append(
-            {"type": "inputText", "text": prefix + block.output}
+            {"type": "inputText", "text": prefix + block.output},
         )
     else:
         for item in block.output:
@@ -307,7 +355,7 @@ def _format_tool_result(block: ToolResultBlock) -> dict[str, Any]:
                 if isinstance(source, URLSource):
                     url = str(source.url)
                     if source.media_type.startswith("image/") and urlparse(
-                        url
+                        url,
                     ).scheme in {"http", "https", "data"}:
                         content_items.append(
                             {"type": "inputImage", "imageUrl": url},

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -21,13 +22,14 @@ class StubRuntime:
         self.responses = responses or {}
         self.requests: list[tuple[str, dict | None]] = []
         self.handlers: dict[str, list[tuple[Any, str | None]]] = defaultdict(
-            list
+            list,
         )
         self.server_handlers: dict[str, Any] = {}
         self.capabilities = CodexCapabilities.focused_contract()
         self.binary_path = "/usr/local/bin/codex"
         self.binary_version: str | None = None
         self.generation_id = "fixture"
+        self.mcp_server_names: tuple[str, ...] = ()
         self.settings = SimpleNamespace(
             tool_wait_timeout_seconds=1.0,
             max_message_bytes=4 * 1024 * 1024,
@@ -64,6 +66,9 @@ class StubRuntime:
         if inspect.isawaitable(response):
             response = await response
         return response
+
+    async def list_mcp_server_names(self) -> tuple[str, ...]:
+        return self.mcp_server_names
 
     @property
     def background_task_count(self) -> int:

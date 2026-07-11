@@ -1,4 +1,5 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Safely probe the focused Codex App Server contract over stdio.
 
 The probe never reads Codex authentication files and never prints credentials.
@@ -52,7 +53,8 @@ class ProbeClient:
             raise ProbeError("app-server stdout is unavailable")
         while True:
             line = await asyncio.wait_for(
-                self.process.stdout.readline(), timeout
+                self.process.stdout.readline(),
+                timeout,
             )
             if not line:
                 raise ProbeError("app-server closed stdout")

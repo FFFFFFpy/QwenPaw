@@ -93,7 +93,35 @@ export const SubscriptionProviderCard = React.memo(
     }, [load]);
 
     const totalModels = provider.models.length + provider.extra_models.length;
-    const isLive = runtime?.state === "ready" && account?.connected === true;
+    const cachedAccountState = provider.meta?.account_state;
+    const cachedAccountEmail =
+      typeof provider.meta?.account_email_masked === "string"
+        ? provider.meta.account_email_masked
+        : null;
+    const cachedPlanType =
+      typeof provider.meta?.plan_type === "string"
+        ? provider.meta.plan_type
+        : null;
+    const accountState = account
+      ? account.connected
+        ? "connected"
+        : "disconnected"
+      : cachedAccountState === "connected" ||
+        cachedAccountState === "disconnected"
+      ? cachedAccountState
+      : "unknown";
+    const accountStateStale =
+      account === null && provider.meta?.account_state_stale === true;
+    const accountLabel =
+      accountState === "connected"
+        ? account?.email_masked ||
+          cachedAccountEmail ||
+          t("models.codexSubscription.connected")
+        : accountState === "disconnected"
+        ? t("models.codexSubscription.notConnected")
+        : t("models.codexSubscription.notChecked");
+    const isLive =
+      runtime?.state === "ready" && cachedAccountState === "connected";
     const usage = useMemo(() => {
       const primary = limits?.primary;
       if (!primary) return "—";
@@ -166,7 +194,11 @@ export const SubscriptionProviderCard = React.memo(
       if (!settings) return;
       setBusy(true);
       try {
-        await codexSubscriptionApi.updateSettings(settings);
+        await codexSubscriptionApi.updateSettings({
+          binary_path: settings.binary_path,
+          preferred_login_flow: settings.preferred_login_flow,
+          tool_wait_timeout_seconds: settings.tool_wait_timeout_seconds,
+        });
         setSettingsOpen(false);
         await redetect();
       } finally {
@@ -183,7 +215,7 @@ export const SubscriptionProviderCard = React.memo(
           <ProviderIcon providerId={provider.id} size={36} />
           <span className={styles.groupCardName}>{provider.name}</span>
           <span className={styles.customTag}>
-            {t("models.codexSubscription.cloudSubscription")}
+            {t("models.codexSubscription.experimental")}
           </span>
           {isLive && (
             <div className={styles.groupCardLiveBadge}>
@@ -210,8 +242,9 @@ export const SubscriptionProviderCard = React.memo(
               {t("models.codexSubscription.account")}
             </span>
             <span className={styles.groupCardFieldValue}>
-              {account?.email_masked ||
-                t("models.codexSubscription.notConnected")}
+              {accountLabel}
+              {accountStateStale &&
+                ` · ${t("models.codexSubscription.statusMayBeOutdated")}`}
             </span>
           </div>
           <div className={styles.groupCardField}>
@@ -219,7 +252,7 @@ export const SubscriptionProviderCard = React.memo(
               {t("models.codexSubscription.plan")}
             </span>
             <span className={styles.groupCardFieldValue}>
-              {account?.plan_type || "—"}
+              {account?.plan_type || cachedPlanType || "—"}
             </span>
           </div>
           <div className={styles.groupCardField}>
@@ -248,9 +281,9 @@ export const SubscriptionProviderCard = React.memo(
         </div>
 
         <div className={styles.groupCardActions}>
-          {runtime?.state === "ready" && !account?.connected && (
+          {runtime?.state === "ready" && accountState !== "connected" && (
             <>
-              {account === null && (
+              {accountState === "unknown" && (
                 <button
                   className={styles.groupCardActBtn}
                   disabled={busy}
@@ -266,20 +299,23 @@ export const SubscriptionProviderCard = React.memo(
                   {t("models.codexSubscription.checkAccount")}
                 </button>
               )}
-              <button
-                className={styles.groupCardActBtn}
-                onClick={() => setLoginFlow("browser")}
-              >
-                {t("models.codexSubscription.connectChatGPT")}
-              </button>
-              {runtime.capabilities?.device_code_login !== false && (
+              {accountState === "disconnected" && (
                 <button
                   className={styles.groupCardActBtn}
-                  onClick={() => setLoginFlow("device_code")}
+                  onClick={() => setLoginFlow("browser")}
                 >
-                  {t("models.codexSubscription.deviceCode")}
+                  {t("models.codexSubscription.connectChatGPT")}
                 </button>
               )}
+              {accountState === "disconnected" &&
+                runtime.capabilities?.device_code_login !== false && (
+                  <button
+                    className={styles.groupCardActBtn}
+                    onClick={() => setLoginFlow("device_code")}
+                  >
+                    {t("models.codexSubscription.deviceCode")}
+                  </button>
+                )}
             </>
           )}
           {runtime?.state !== "ready" && (
@@ -291,7 +327,7 @@ export const SubscriptionProviderCard = React.memo(
               {t("models.codexSubscription.redetect")}
             </button>
           )}
-          {account?.connected && (
+          {accountState === "connected" && (
             <>
               <button
                 className={styles.groupCardActBtn}

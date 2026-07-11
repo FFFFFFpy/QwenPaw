@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
 """Concurrent bidirectional JSON-RPC-over-JSONL client."""
+
+# pylint: disable=too-many-branches,try-except-raise
 
 from __future__ import annotations
 
@@ -200,7 +203,7 @@ class JsonRpcClient:
             future = self._pending.get(message["id"])
             if future is None or future.done():
                 logger.debug(
-                    "Ignoring duplicate or unknown Codex RPC response"
+                    "Ignoring duplicate or unknown Codex RPC response",
                 )
                 return
             if "error" in message:

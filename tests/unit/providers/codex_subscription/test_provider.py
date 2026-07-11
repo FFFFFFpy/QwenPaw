@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from qwenpaw.providers.codex_subscription.provider import (
@@ -38,7 +39,7 @@ async def test_provider_directly_extends_provider_and_reports_oauth(
     assert info.oauth_connected is True
     assert info.meta["account_state"] == "connected"
     assert [method for method, _ in stub_runtime.requests].count(
-        "account/read"
+        "account/read",
     ) == 1
 
 

@@ -76,6 +76,7 @@ export interface CodexSubscriptionSettings {
   binary_path: string;
   preferred_login_flow: CodexLoginFlow;
   tool_wait_timeout_seconds: number;
+  tool_isolation_verified_fingerprints: string[];
 }
 
 export interface CodexSubscriptionSettingsUpdate {

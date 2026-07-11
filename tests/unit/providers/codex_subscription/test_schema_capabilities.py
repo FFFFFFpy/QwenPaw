@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import pytest
@@ -32,40 +33,7 @@ def _notification_variant(method: str, params_ref: str) -> dict:
     }
 
 
-def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
-    if restricted_sandbox:
-        sandbox_schema: dict = {
-            "oneOf": [
-                {
-                    "type": "object",
-                    "required": ["type", "networkAccess", "access"],
-                    "properties": {
-                        "type": {"type": "string", "enum": ["readOnly"]},
-                        "networkAccess": {"type": "boolean"},
-                        "access": {
-                            "type": "object",
-                            "required": ["type", "readableRoots"],
-                            "properties": {
-                                "type": {
-                                    "type": "string",
-                                    "enum": ["restricted"],
-                                },
-                                "readableRoots": {
-                                    "type": "array",
-                                    "items": {"type": "string"},
-                                },
-                            },
-                        },
-                    },
-                },
-            ],
-        }
-    else:
-        sandbox_schema = {
-            "type": "string",
-            "enum": ["read-only", "workspace-write"],
-        }
-
+def protocol_documents() -> dict[str, dict]:
     request_methods = {
         "initialize": "InitializeParams",
         "account/read": "EmptyParams",
@@ -74,9 +42,10 @@ def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
         "account/logout": "EmptyParams",
         "account/rateLimits/read": "EmptyParams",
         "model/list": "EmptyParams",
+        "mcpServerStatus/list": "EmptyParams",
         "thread/start": "ThreadStartParams",
         "thread/unsubscribe": "EmptyParams",
-        "turn/start": "EmptyParams",
+        "turn/start": "TurnStartParams",
         "turn/interrupt": "EmptyParams",
     }
     client_definitions = {
@@ -94,11 +63,37 @@ def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
         "ThreadStartParams": {
             "type": "object",
             "properties": {
-                "sandbox": {"$ref": "#/definitions/SandboxPolicy"},
+                "sandbox": {"$ref": "#/definitions/SandboxMode"},
+                "config": {"type": ["object", "null"]},
                 "dynamicTools": {"type": "array"},
+                "environments": {"type": "array"},
             },
         },
-        "SandboxPolicy": sandbox_schema,
+        "TurnStartParams": {
+            "type": "object",
+            "properties": {
+                "threadId": {"type": "string"},
+                "input": {"type": "array"},
+                "effort": {"type": ["string", "null"]},
+                "sandboxPolicy": {"$ref": "#/definitions/SandboxPolicy"},
+            },
+        },
+        "SandboxMode": {
+            "type": "string",
+            "enum": ["read-only", "workspace-write"],
+        },
+        "SandboxPolicy": {
+            "oneOf": [
+                {
+                    "type": "object",
+                    "required": ["type"],
+                    "properties": {
+                        "type": {"type": "string", "enum": ["readOnly"]},
+                        "networkAccess": {"type": "boolean"},
+                    },
+                },
+            ],
+        },
     }
     client_request = {
         "oneOf": [
@@ -147,7 +142,7 @@ def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
                     "callId": {"type": "string"},
                     "namespace": {"type": ["string", "null"]},
                     "tool": {"type": "string"},
-                    "arguments": {},
+                    "arguments": True,
                 },
             },
         },
@@ -168,8 +163,16 @@ def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
             "TurnCompletedNotification": {"type": "object"},
         },
     }
-    client_responses = {
+    client_responses: dict[str, dict] = {
         method: {"type": "object"} for method in request_methods
+    }
+    client_responses["mcpServerStatus/list"] = {
+        "type": "object",
+        "required": ["data"],
+        "properties": {
+            "data": {"type": "array"},
+            "nextCursor": {"type": ["string", "null"]},
+        },
     }
     server_responses = {
         "item/tool/call": {
@@ -179,7 +182,7 @@ def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
                 "contentItems": {"type": "array"},
                 "success": {"type": "boolean"},
             },
-        }
+        },
     }
     return {
         "client_request": client_request,
@@ -191,15 +194,18 @@ def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
     }
 
 
-def test_structured_schema_detects_restricted_sandbox_and_requests():
+def test_structured_schema_detects_real_sandbox_and_requests():
     catalog = AppServerSchemaCatalog.from_documents(**protocol_documents())
     capabilities = CodexCapabilities.from_catalog(catalog)
-    assert capabilities.restricted_read_sandbox is True
-    assert capabilities.network_disabled_sandbox is True
+    assert capabilities.thread_sandbox_mode is True
+    assert capabilities.turn_sandbox_policy is True
+    assert capabilities.sandbox_network_disable is True
+    assert capabilities.config_overrides is True
+    assert capabilities.tool_isolation_verified is False
     assert capabilities.dynamic_tools is True
     assert capabilities.dynamic_tool_namespace is True
     assert capabilities.required_protocol_methods is True
-    assert capabilities.missing_required_methods == ()
+    assert not capabilities.missing_required_methods
     assert capabilities.command_approval_requests is True
     assert capabilities.file_approval_requests is True
     assert capabilities.permission_approval_requests is True
@@ -218,38 +224,51 @@ def test_structured_schema_detects_restricted_sandbox_and_requests():
         "chatgpt",
     )
 
-    assert build_restricted_sandbox_policy(capabilities, "/tmp/isolated") == {
+    assert build_restricted_sandbox_policy(capabilities) == {
         "type": "readOnly",
         "networkAccess": False,
-        "access": {
-            "type": "restricted",
-            "readableRoots": ["/tmp/isolated"],
-        },
     }
 
 
-def test_legacy_read_only_string_is_not_a_security_capability():
-    catalog = AppServerSchemaCatalog.from_documents(
-        **protocol_documents(restricted_sandbox=False),
-    )
+def test_missing_turn_sandbox_policy_is_not_compatible():
+    documents = protocol_documents()
+    definitions = documents["client_request"]["definitions"]
+    definitions["TurnStartParams"]["properties"].pop("sandboxPolicy")
+    catalog = AppServerSchemaCatalog.from_documents(**documents)
     capabilities = CodexCapabilities.from_catalog(catalog)
-    assert capabilities.restricted_read_sandbox is False
-    assert capabilities.network_disabled_sandbox is False
+    assert capabilities.thread_sandbox_mode is True
+    assert capabilities.turn_sandbox_policy is False
+    with pytest.raises(CodexSubscriptionError) as caught:
+        capabilities.validate_required_surface()
+    assert caught.value.error_code == "CODEX_SANDBOX_UNSUPPORTED"
+
+
+def test_missing_empty_environment_isolation_is_not_compatible():
+    documents = protocol_documents()
+    definitions = documents["client_request"]["definitions"]
+    definitions["ThreadStartParams"]["properties"].pop("environments")
+    capabilities = CodexCapabilities.from_catalog(
+        AppServerSchemaCatalog.from_documents(**documents),
+    )
+
+    assert capabilities.environments_field is False
     with pytest.raises(CodexSubscriptionError) as caught:
         capabilities.validate_required_surface()
     assert caught.value.error_code == "CODEX_SANDBOX_UNSUPPORTED"
 
 
 def test_security_words_outside_the_field_shape_do_not_count():
-    documents = protocol_documents(restricted_sandbox=False)
+    documents = protocol_documents()
+    definitions = documents["client_request"]["definitions"]
+    definitions["TurnStartParams"]["properties"].pop("sandboxPolicy")
     documents["server_notification"][
         "description"
     ] = "readOnly restricted readableRoots networkAccess approvalPolicy"
     capabilities = CodexCapabilities.from_catalog(
         AppServerSchemaCatalog.from_documents(**documents),
     )
-    assert capabilities.restricted_read_sandbox is False
-    assert capabilities.network_disabled_sandbox is False
+    assert capabilities.turn_sandbox_policy is False
+    assert capabilities.sandbox_network_disable is False
 
 
 @pytest.mark.parametrize(
@@ -300,7 +319,7 @@ def test_login_method_without_chatgpt_variant_is_incompatible():
     documents = protocol_documents()
     definitions = documents["client_request"]["definitions"]
     definitions["LoginParams"]["properties"]["type"]["enum"] = [
-        "chatgptDeviceCode"
+        "chatgptDeviceCode",
     ]
     capabilities = CodexCapabilities.from_catalog(
         AppServerSchemaCatalog.from_documents(**documents),

@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 # pylint: disable=redefined-outer-name
 # pylint: disable=reimported,unused-argument,unnecessary-pass
+# pylint: disable=wrong-import-position
 """
 Global pytest fixtures for CoPaw test suite.
 
@@ -8,6 +9,7 @@ This module provides shared fixtures for testing CoPaw components.
 All fixtures are designed to be isolated, safe, and easy to use.
 """
 
+import atexit
 import logging
 import os
 import shutil
@@ -20,7 +22,19 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from qwenpaw.providers import provider_manager as _provider_manager_module
+# Test processes must never touch a developer's real keychain or secret store.
+# These values are set before the first qwenpaw import because constant.py and
+# provider package initialization happen during test collection.
+_TEST_SECRET_ROOT = Path(tempfile.mkdtemp(prefix="qwenpaw-pytest-secrets-"))
+os.environ["QWENPAW_DISABLE_KEYRING"] = "1"
+os.environ["QWENPAW_SECRET_DIR"] = str(_TEST_SECRET_ROOT)
+atexit.register(shutil.rmtree, _TEST_SECRET_ROOT, ignore_errors=True)
+
+from qwenpaw import constant as _constant_module  # noqa: E402
+from qwenpaw.providers import (  # noqa: E402
+    provider_manager as _provider_manager_module,
+)
+from qwenpaw.security import secret_store as _secret_store_module  # noqa: E402
 
 
 @pytest.fixture
@@ -455,7 +469,12 @@ def isolated_secret_dir(monkeypatch, tmp_path):
     a fresh ProviderManager singleton.
     """
     secret_dir = tmp_path / ".qwenpaw.secret"
+    monkeypatch.setenv("QWENPAW_DISABLE_KEYRING", "1")
+    monkeypatch.setenv("QWENPAW_SECRET_DIR", str(secret_dir))
+    monkeypatch.setattr(_constant_module, "SECRET_DIR", secret_dir)
     monkeypatch.setattr(_provider_manager_module, "SECRET_DIR", secret_dir)
+    monkeypatch.setattr(_secret_store_module, "_cached_master_key", None)
+    monkeypatch.setattr(_secret_store_module, "_cached_fernet", None)
     monkeypatch.setattr(
         _provider_manager_module.ProviderManager,
         "_instance",

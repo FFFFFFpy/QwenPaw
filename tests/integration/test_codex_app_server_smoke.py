@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Opt-in smoke test for an explicitly installed real Codex App Server."""
 
 from __future__ import annotations
@@ -19,7 +20,7 @@ pytestmark = [
 
 
 async def test_real_codex_app_server_protocol_smoke() -> None:
-    """Validate schema, initialize, unknown request, account, and shutdown."""
+    """Validate schema, initialize, unknown request, and clean shutdown."""
 
     runtime = CodexAppServerRuntime()
     try:
@@ -34,20 +35,33 @@ async def test_real_codex_app_server_protocol_smoke() -> None:
         with pytest.raises(CodexSubscriptionError) as unknown:
             await runtime.request("qwenpaw/unknown-smoke-request", {})
         assert unknown.value.error_code == "CODEX_TURN_FAILED"
+    finally:
+        await runtime.stop()
 
+
+@pytest.mark.skipif(
+    os.getenv("QWENPAW_RUN_CODEX_ACCOUNT_SMOKE") != "1",
+    reason="account smoke requires explicit human authorization",
+)
+async def test_real_codex_account_smoke() -> None:
+    """Separately verify account and model IO when explicitly authorized."""
+
+    runtime = CodexAppServerRuntime()
+    try:
+        await runtime.start()
         account = await runtime.request(
             "account/read",
             {"refreshToken": False},
         )
         account_row = account.get("account")
-        if (
-            isinstance(account_row, dict)
-            and account_row.get("type") == "chatgpt"
-        ):
-            models = await runtime.request(
-                "model/list",
-                {"limit": 1, "includeHidden": False},
-            )
-            assert isinstance(models.get("data"), list)
+        assert isinstance(account_row, dict)
+        assert account_row.get("type") == "chatgpt"
+        models = await runtime.request(
+            "model/list",
+            {"limit": 1, "includeHidden": False},
+        )
+        assert isinstance(models.get("data"), list)
+        limits = await runtime.request("account/rateLimits/read", None)
+        assert isinstance(limits, dict)
     finally:
         await runtime.stop()

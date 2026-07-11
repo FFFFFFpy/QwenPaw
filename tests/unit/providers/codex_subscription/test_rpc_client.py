@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=redefined-outer-name
 from __future__ import annotations
 
 import asyncio

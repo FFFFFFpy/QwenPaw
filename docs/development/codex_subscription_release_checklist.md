@@ -24,7 +24,8 @@ tool round trips, per-thread routing, and an explicit cloud-subscription UI.
 | Type and style checks | Focused mypy, Black, Flake8; full frontend typecheck/format plus Codex-surface ESLint |
 | Production console build | The workflow runs the production TypeScript/Vite build |
 | Secret scan | Gitleaks blocks detected credentials or private keys |
-| Real App Server | Workflow-dispatch only; requires `run_real_smoke=true` |
+| Real App Server schema/lifecycle | Default no-account CI job; never calls `account/read` |
+| Real account and tool isolation | Workflow-dispatch/manual only; requires `run_real_smoke=true` and explicit credential-store authorization |
 
 Unit coverage includes malformed and oversized JSON, out-of-order responses,
 EOF/crash propagation, stderr backpressure, request timeout/cancellation,
@@ -58,6 +59,9 @@ and automated tests deliberately do not depend on a real ChatGPT account.
 - Provider listing does not start an account read. Account state is checked
   on an explicit UI action and cached briefly to prevent repeated OS prompts.
 - Provider listing and `GET /runtime` are read-only and do not start Codex.
+- Verified schema fingerprints are read-only through the settings API. Only a
+  successful account-backed isolation probe can append one to the settings
+  file.
 - Cancellation waits for a confirmed interrupt; cleanup failure blocks a new
   turn until explicit retry or Runtime restart.
 - Full payload size includes text, images, tools, and JSON overhead; size-error
@@ -78,18 +82,29 @@ and automated tests deliberately do not depend on a real ChatGPT account.
 ## CI and opt-in smoke
 
 `.github/workflows/codex-provider-hardening.yml` runs backend full/focused
-tests, frontend tests, typecheck/lint/build, secret scan, and uploads a summary
-artifact. The real-binary job is off by default. Release operators may enable
-it from workflow dispatch, or run locally only with explicit consent:
+tests, frontend tests, typecheck/lint/build, secret scan, a no-account schema
+smoke, and uploads a summary artifact. The account-backed job is off by
+default. A release operator may run the no-account smoke locally with:
 
 ```bash
 QWENPAW_RUN_CODEX_SMOKE=1 \
   pytest tests/integration/test_codex_app_server_smoke.py -v
 ```
 
-The smoke validates binary/schema/initialize/unknown-request/shutdown and, when
-a ChatGPT account is connected, `account/read` plus `model/list`. Do not enable
-it on a machine where platform credential access has not been authorized.
+That smoke validates binary/schema/initialize/unknown-request/shutdown without
+account I/O. On a separately authorized release machine, record a successful
+full tool-isolation probe with:
+
+```bash
+python scripts/dev/probe_codex_tool_isolation.py \
+  --account-backed \
+  --record-settings /path/to/codex_subscription/settings.json
+```
+
+The recorder runs only after the probe observes no built-in side-effect items
+and confirms a QwenPaw Dynamic Tool call. Do not run it on a machine where the
+official Codex credential store has not been explicitly authorized. Restart
+QwenPaw after recording so the runtime reloads the verified fingerprint.
 
 ## Rollback
 

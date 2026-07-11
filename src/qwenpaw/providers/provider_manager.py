@@ -1393,7 +1393,7 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self._add_builtin(PROVIDER_OPENAI_RESPONSE)
         codex_enabled = os.getenv(
             "QWENPAW_CODEX_SUBSCRIPTION_ENABLED",
-            "true",
+            "false",
         ).lower()
         if codex_enabled not in {
             "0",
