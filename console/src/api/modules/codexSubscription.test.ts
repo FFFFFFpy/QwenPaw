@@ -25,19 +25,6 @@ describe("codexSubscriptionApi", () => {
     );
   });
 
-  it("updates only non-secret subscription settings", async () => {
-    const body = {
-      reasoning_effort: "high",
-      relay_reasoning: true,
-    };
-    await codexSubscriptionApi.updateSettings(body);
-    expect(request).toHaveBeenCalledWith("/providers/openai-codex/settings", {
-      method: "PUT",
-      body: JSON.stringify(body),
-    });
-    expect(JSON.stringify(body).toLowerCase()).not.toContain("token");
-  });
-
   it("updates one chat model without generic request kwargs", async () => {
     const body = { reasoning_effort: "high", relay_reasoning: true };
     await codexSubscriptionApi.updateChatModelSettings("gpt-5.6/luna", body);

@@ -78,17 +78,3 @@ export interface CodexRateLimits {
   available: boolean;
   message: string;
 }
-
-export interface CodexSubscriptionSettings {
-  transport: "direct";
-  reasoning_effort: string | null;
-  relay_reasoning: boolean;
-  context_size: number;
-  compact_threshold: number;
-  direct_enabled: boolean;
-}
-
-export interface CodexSubscriptionSettingsUpdate {
-  reasoning_effort?: string | null;
-  relay_reasoning?: boolean;
-}

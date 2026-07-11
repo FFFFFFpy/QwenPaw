@@ -7,8 +7,6 @@ import type {
   CodexLoginStatus,
   CodexModelsRefresh,
   CodexRateLimits,
-  CodexSubscriptionSettings,
-  CodexSubscriptionSettingsUpdate,
 } from "../types/codexSubscription";
 
 const base = "/providers/openai-codex";
@@ -57,10 +55,4 @@ export const codexSubscriptionApi = {
       `${base}/image-models/${encodeURIComponent(modelId)}/settings`,
       { method: "PUT", body: JSON.stringify(body) },
     ),
-  getSettings: () => request<CodexSubscriptionSettings>(`${base}/settings`),
-  updateSettings: (body: CodexSubscriptionSettingsUpdate) =>
-    request<CodexSubscriptionSettings>(`${base}/settings`, {
-      method: "PUT",
-      body: JSON.stringify(body),
-    }),
 };
