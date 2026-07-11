@@ -30,6 +30,7 @@ from pydantic import BaseModel
 from .auth_service import AuthService
 from .errors import CodexSubscriptionError
 from .message_mapper import MessageMapper
+from .payload_budget import TurnPayloadBudget
 from .runtime import CodexAppServerRuntime, RuntimeState
 from .schema_capabilities import build_restricted_sandbox_policy
 from .tool_bridge import format_dynamic_tools
@@ -257,6 +258,12 @@ class CodexSubscriptionChatModel(ChatModelBase):
                         "input",
                     )
 
+            effort = _resolve_reasoning_effort(
+                generate_kwargs,
+                getattr(self.parameters, "reasoning_effort", None),
+                model_row,
+            )
+
             thread_params: dict[str, Any] = {
                 "model": model_name,
                 "cwd": temporary.name,
@@ -277,6 +284,20 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 thread_params["environments"] = []
             if dynamic_tools:
                 thread_params["dynamicTools"] = dynamic_tools
+            turn_template: dict[str, Any] = {"input": turn_input}
+            if effort is not None:
+                turn_template["effort"] = effort
+            attachment_count = sum(
+                item.get("type") == "image" for item in turn_input
+            )
+            payload_budget = TurnPayloadBudget(
+                self.runtime.settings.max_message_bytes,
+            )
+            payload_budget.validate(
+                thread_params,
+                turn_template,
+                attachment_count=attachment_count,
+            )
             thread_response = await self.runtime.request(
                 "thread/start",
                 thread_params,
@@ -300,15 +321,15 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 ),
             )
 
-            effort = generate_kwargs.get("reasoning_effort")
-            if not isinstance(effort, str):
-                effort = getattr(self.parameters, "reasoning_effort", None)
             turn_params: dict[str, Any] = {
                 "threadId": thread_id,
-                "input": turn_input,
+                **turn_template,
             }
-            if effort:
-                turn_params["effort"] = effort
+            payload_budget.validate(
+                thread_params,
+                turn_params,
+                attachment_count=attachment_count,
+            )
             turn_response = await self.runtime.request(
                 "turn/start", turn_params
             )
@@ -577,6 +598,44 @@ class CodexSubscriptionChatModel(ChatModelBase):
         if self._cleanup_barrier is task:
             self._cleanup_barrier = None
             self._cleanup_bridge = None
+
+
+def _resolve_reasoning_effort(
+    generate_kwargs: dict[str, Any],
+    saved_effort: str | None,
+    model_row: dict[str, Any],
+) -> str | None:
+    if "reasoning_effort" in generate_kwargs:
+        effort = generate_kwargs["reasoning_effort"]
+    elif saved_effort is not None:
+        effort = saved_effort
+    else:
+        effort = model_row.get("defaultReasoningEffort")
+
+    if effort is None:
+        return None
+    if not isinstance(effort, str) or not effort.strip():
+        raise CodexSubscriptionError(
+            "CODEX_REASONING_EFFORT_UNSUPPORTED",
+            "The requested Codex reasoning effort is invalid",
+        )
+    effort = effort.strip()
+    supported: list[str] = []
+    options = model_row.get("supportedReasoningEfforts")
+    if isinstance(options, list):
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            value = option.get("reasoningEffort")
+            if isinstance(value, str) and value not in supported:
+                supported.append(value)
+    if supported and effort not in supported:
+        raise CodexSubscriptionError(
+            "CODEX_REASONING_EFFORT_UNSUPPORTED",
+            "The requested reasoning effort is unavailable for this model",
+            details={"supported_efforts": supported},
+        )
+    return effort
 
 
 def _extract_tool_results(messages: list[Msg]) -> list[ToolResultBlock]:

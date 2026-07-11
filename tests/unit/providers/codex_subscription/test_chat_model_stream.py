@@ -5,7 +5,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
-from agentscope.message import Msg, TextBlock
+from agentscope.message import Base64Source, DataBlock, Msg, TextBlock
 from agentscope.model import FinishedReason
 
 from qwenpaw.providers.codex_subscription.chat_model import (
@@ -219,6 +219,113 @@ async def test_temporary_working_directory_is_removed(stub_runtime):
     _ = [chunk async for chunk in response]
     assert captured is not None
     assert not captured.exists()
+
+
+@pytest.mark.parametrize(
+    ("call_effort", "saved_effort", "default_effort", "expected"),
+    [
+        ("high", "low", "medium", "high"),
+        (None, "low", "medium", "low"),
+        (None, None, "medium", "medium"),
+        (None, None, None, None),
+    ],
+)
+async def test_reasoning_effort_priority_reaches_turn_start(
+    stub_runtime,
+    call_effort,
+    saved_effort,
+    default_effort,
+    expected,
+):
+    model = make_model(stub_runtime)
+    model.parameters.reasoning_effort = saved_effort
+    model_row = stub_runtime.responses["model/list"]["data"][0]
+    model_row["defaultReasoningEffort"] = default_effort
+    model_row["supportedReasoningEfforts"] = [
+        {"reasoningEffort": value} for value in ("low", "medium", "high")
+    ]
+    schedule_completed_turn(stub_runtime)
+    kwargs = (
+        {"reasoning_effort": call_effort} if call_effort is not None else {}
+    )
+    response = await model(
+        [Msg(name="user", role="user", content=[TextBlock(text="hi")])],
+        **kwargs,
+    )
+    _ = [chunk async for chunk in response]
+    turn_params = next(
+        params
+        for method, params in stub_runtime.requests
+        if method == "turn/start"
+    )
+    if expected is None:
+        assert "effort" not in turn_params
+    else:
+        assert turn_params["effort"] == expected
+
+
+async def test_invalid_reasoning_effort_is_rejected_before_turn(stub_runtime):
+    model = make_model(stub_runtime)
+    model_row = stub_runtime.responses["model/list"]["data"][0]
+    model_row["defaultReasoningEffort"] = "medium"
+    model_row["supportedReasoningEfforts"] = [
+        {"reasoningEffort": "low"},
+        {"reasoningEffort": "medium"},
+    ]
+    with pytest.raises(CodexSubscriptionError) as caught:
+        response = await model(
+            [Msg(name="user", role="user", content=[TextBlock(text="hi")])],
+            reasoning_effort="impossible",
+        )
+        _ = [chunk async for chunk in response]
+    assert caught.value.error_code == "CODEX_REASONING_EFFORT_UNSUPPORTED"
+    assert not any(
+        method == "thread/start" for method, _ in stub_runtime.requests
+    )
+
+
+async def test_complete_payload_budget_blocks_before_thread_start(
+    stub_runtime,
+):
+    model = make_model(stub_runtime)
+    stub_runtime.settings.max_message_bytes = 100
+    message = Msg(
+        name="user",
+        role="user",
+        content=[
+            TextBlock(text="history" * 20),
+            DataBlock(
+                source=Base64Source(
+                    data="a" * 80,
+                    media_type="image/png",
+                )
+            ),
+        ],
+    )
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup",
+                "description": "tool schema" * 20,
+                "parameters": {"type": "object"},
+            },
+        }
+    ]
+
+    with pytest.raises(CodexSubscriptionError) as caught:
+        response = await model([message], tools=tools)
+        _ = [chunk async for chunk in response]
+    assert caught.value.error_code == "CODEX_REQUEST_TOO_LARGE"
+    assert caught.value.details["attachment_count"] == 1
+    assert set(caught.value.details) == {
+        "payload_bytes",
+        "limit_bytes",
+        "attachment_count",
+    }
+    assert not any(
+        method == "thread/start" for method, _ in stub_runtime.requests
+    )
 
 
 @pytest.mark.parametrize(

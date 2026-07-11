@@ -25,6 +25,12 @@ ServerRequestHandler = Callable[
 Unsubscribe = Callable[[], None]
 
 
+def encode_json_message(message: dict[str, Any]) -> bytes:
+    """Encode one protocol object exactly as it appears on the wire."""
+
+    return json.dumps(message, separators=(",", ":")).encode("utf-8")
+
+
 class JsonRpcClient:
     def __init__(
         self,
@@ -146,7 +152,7 @@ class JsonRpcClient:
     async def _write(self, message: dict[str, Any]) -> None:
         if self._closed_error is not None:
             raise self._closed_error
-        encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
+        encoded = encode_json_message(message)
         if len(encoded) > self._max_message_bytes:
             raise CodexProtocolError("Codex JSON-RPC message is too large")
         async with self._write_lock:

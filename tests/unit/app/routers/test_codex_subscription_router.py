@@ -57,6 +57,15 @@ def test_account_response_is_masked_and_token_free() -> None:
     assert "token" not in response.text.lower()
 
 
+def test_runtime_status_is_read_only_for_provider_list() -> None:
+    app, runtime = _application()
+    response = TestClient(app).get("/api/providers/openai-codex/runtime")
+    assert response.status_code == 200
+    assert response.json()["state"] == "stopped"
+    assert runtime.state.value == "stopped"
+    assert not runtime.requests
+
+
 def test_browser_login_uses_dedicated_app_server_flow() -> None:
     app, runtime = _application()
     response = TestClient(app).post(

@@ -20,6 +20,9 @@ class CodexAccountStatus(BaseModel):
     auth_type: str | None = None
 
 
+AccountState = Literal["unknown", "connected", "disconnected"]
+
+
 class LoginStartResult(BaseModel):
     state: str
     flow_type: Literal["browser_redirect", "device_code"]
@@ -116,6 +119,18 @@ class AuthService:
             self._account_cache_generation = self.runtime.generation_id
             self._account_cache_time = time.monotonic()
             return status.model_copy()
+
+    def cached_account(
+        self,
+    ) -> tuple[AccountState, CodexAccountStatus | None]:
+        """Return a fresh account snapshot without runtime or auth I/O."""
+
+        account = self._get_cached_account(force=False)
+        if account is None:
+            return "unknown", None
+        if account.connected:
+            return "connected", account
+        return "disconnected", account
 
     async def start_login(
         self,

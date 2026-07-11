@@ -100,3 +100,27 @@ def test_mapper_rejects_arbitrary_local_image_paths():
     with pytest.raises(CodexSubscriptionError) as caught:
         mapper.map_messages([message])
     assert caught.value.error_code == "CODEX_BUILTIN_SIDE_EFFECT_BLOCKED"
+
+
+def test_mapper_reports_attachment_limit_without_content():
+    mapper = MessageMapper(max_image_bytes=3)
+    message = Msg(
+        name="user",
+        role="user",
+        content=[
+            DataBlock(
+                source=Base64Source(
+                    data="aGVsbG8=",
+                    media_type="image/png",
+                )
+            )
+        ],
+    )
+    with pytest.raises(CodexSubscriptionError) as caught:
+        mapper.map_messages([message])
+    assert caught.value.error_code == "CODEX_ATTACHMENT_TOO_LARGE"
+    assert caught.value.details == {
+        "payload_bytes": 5,
+        "limit_bytes": 3,
+        "attachment_count": 1,
+    }

@@ -83,8 +83,13 @@ class MessageMapper:
             estimated_size = len(source.data.rstrip("=")) * 3 // 4
             if estimated_size > self.max_image_bytes:
                 raise CodexSubscriptionError(
-                    "CODEX_CONTEXT_WINDOW_EXCEEDED",
+                    "CODEX_ATTACHMENT_TOO_LARGE",
                     "The image attachment is too large for Codex",
+                    details={
+                        "payload_bytes": estimated_size,
+                        "limit_bytes": self.max_image_bytes,
+                        "attachment_count": 1,
+                    },
                 )
             return {
                 "type": "image",
@@ -98,10 +103,16 @@ class MessageMapper:
                     "CODEX_BUILTIN_SIDE_EFFECT_BLOCKED",
                     "Local paths are not accepted as Codex image inputs",
                 )
-            if parsed.scheme == "data" and len(url) > self.max_image_bytes * 2:
+            encoded_size = len(url.encode("utf-8"))
+            if parsed.scheme == "data" and encoded_size > self.max_image_bytes:
                 raise CodexSubscriptionError(
-                    "CODEX_CONTEXT_WINDOW_EXCEEDED",
+                    "CODEX_ATTACHMENT_TOO_LARGE",
                     "The image attachment is too large for Codex",
+                    details={
+                        "payload_bytes": encoded_size,
+                        "limit_bytes": self.max_image_bytes,
+                        "attachment_count": 1,
+                    },
                 )
             return {"type": "image", "url": url}
         raise CodexSubscriptionError(

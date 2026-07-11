@@ -116,14 +116,14 @@ def _raise_http(exc: CodexSubscriptionError) -> NoReturn:
 async def runtime_status(
     manager: ProviderManager = Depends(_manager),
 ) -> RuntimeStatusResponse:
-    provider = _provider(manager)
-    runtime = provider.runtime
-    error: CodexSubscriptionError | None = None
-    if runtime.state is not RuntimeState.READY:
-        try:
-            await runtime.start()
-        except CodexSubscriptionError as exc:
-            error = exc
+    runtime = _provider(manager).runtime
+    return _runtime_status_response(runtime)
+
+
+def _runtime_status_response(
+    runtime: Any,
+    error: CodexSubscriptionError | None = None,
+) -> RuntimeStatusResponse:
     capabilities = runtime.capabilities
     return RuntimeStatusResponse(
         state=runtime.state.value,
@@ -143,11 +143,12 @@ async def runtime_redetect(
     manager: ProviderManager = Depends(_manager),
 ) -> RuntimeStatusResponse:
     provider = _provider(manager)
+    error: CodexSubscriptionError | None = None
     try:
         await provider.runtime.redetect()
-    except CodexSubscriptionError:
-        pass
-    return await runtime_status(manager)
+    except CodexSubscriptionError as exc:
+        error = exc
+    return _runtime_status_response(provider.runtime, error)
 
 
 @router.get("/account", response_model=CodexAccountStatus)

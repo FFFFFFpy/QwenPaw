@@ -122,6 +122,19 @@ describe("getIsConfigured", () => {
       true,
     );
   });
+
+  it("does not treat an unknown subscription account as Live", () => {
+    const subscription = provider({
+      id: "openai-codex",
+      require_api_key: false,
+      oauth_connected: false,
+      meta: {
+        provider_kind: "cloud_subscription",
+        account_state: "unknown",
+      },
+    });
+    expect(getIsConfigured(subscription)).toBe(false);
+  });
 });
 
 describe("groupProviders", () => {

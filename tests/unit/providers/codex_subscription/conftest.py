@@ -26,8 +26,12 @@ class StubRuntime:
         self.server_handlers: dict[str, Any] = {}
         self.capabilities = CodexCapabilities.focused_contract()
         self.binary_path = "/usr/local/bin/codex"
+        self.binary_version: str | None = None
         self.generation_id = "fixture"
-        self.settings = SimpleNamespace(tool_wait_timeout_seconds=1.0)
+        self.settings = SimpleNamespace(
+            tool_wait_timeout_seconds=1.0,
+            max_message_bytes=4 * 1024 * 1024,
+        )
         self._background_tasks: set[asyncio.Task[Any]] = set()
         self._background_errors: list[BaseException] = []
         self.turn_cleanup_error: CodexSubscriptionError | None = None

@@ -13,7 +13,7 @@ from .auth_service import AuthService
 from .errors import CodexSubscriptionError
 from .model_catalog import ModelCatalog
 from .rate_limits import RateLimitService
-from .runtime import CodexAppServerRuntime, RuntimeState, get_codex_runtime
+from .runtime import CodexAppServerRuntime, get_codex_runtime
 
 
 class CodexSubscriptionProvider(Provider):
@@ -101,12 +101,7 @@ class CodexSubscriptionProvider(Provider):
 
     async def get_info(self, mock_secret: bool = True) -> ProviderInfo:
         del mock_secret
-        account = None
-        if self._runtime.state is RuntimeState.READY:
-            try:
-                account = await self._auth.read_account()
-            except Exception:
-                pass
+        account_state, account = self._auth.cached_account()
         data = self.model_dump()
         data["api_key"] = ""
         data["oauth_connected"] = bool(account and account.connected)
@@ -117,6 +112,7 @@ class CodexSubscriptionProvider(Provider):
             "runtime_kind": "codex_app_server",
             **self.meta,
             "runtime_state": self._runtime.state.value,
+            "account_state": account_state,
             "binary_path": self._runtime.binary_path,
             "account_email_masked": (
                 account.email_masked if account is not None else None
@@ -142,7 +138,9 @@ class CodexSubscriptionProvider(Provider):
                 name="ChatGPT subscription managed by Codex",
             ),
             model=model_id,
-            parameters=CodexSubscriptionChatModel.Parameters(),
+            parameters=CodexSubscriptionChatModel.Parameters(
+                reasoning_effort=model.reasoning_effort,
+            ),
             stream=True,
             context_size=self.get_context_size(model_id),
             runtime=self._runtime,
