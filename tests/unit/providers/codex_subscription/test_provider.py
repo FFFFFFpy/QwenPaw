@@ -1,6 +1,9 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+from agentscope.formatter import FormatterBase, OpenAIChatFormatter
+
+from qwenpaw.agents.model_factory import _create_formatter_instance
 from qwenpaw.providers.codex_subscription.provider import (
     CodexSubscriptionProvider,
 )
@@ -64,6 +67,18 @@ async def test_provider_fetches_models_without_generation(stub_runtime):
     chat_model = provider.get_chat_model_instance("codex-test")
     assert chat_model.auth_service is provider.auth_service
     assert chat_model.parameters.reasoning_effort == "medium"
+
+
+async def test_provider_model_derives_request_formatter(stub_runtime):
+    provider = make_provider(stub_runtime)
+    await provider.fetch_models()
+
+    model = provider.get_chat_model_instance("codex-test")
+    formatter = _create_formatter_instance(model)
+
+    assert isinstance(model.formatter, OpenAIChatFormatter)
+    assert model.formatter.input_types == ["text/plain", "image/*"]
+    assert isinstance(formatter, FormatterBase)
 
 
 async def test_disconnected_account_cache_is_reported_without_auth_io(

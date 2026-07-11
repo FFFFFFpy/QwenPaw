@@ -6,6 +6,7 @@ from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from agentscope.formatter import FormatterBase, OpenAIChatFormatter
 from agentscope.message import Base64Source, DataBlock, Msg, TextBlock
 from agentscope.model import FinishedReason
 
@@ -17,6 +18,7 @@ from qwenpaw.providers.codex_subscription.credential import (
     CodexSubscriptionCredential,
 )
 from qwenpaw.providers.codex_subscription.errors import CodexSubscriptionError
+from qwenpaw.agents.model_factory import _create_formatter_instance
 
 
 def make_model(stub_runtime, *, relay_reasoning: bool = True):
@@ -90,6 +92,15 @@ def schedule_completed_turn(stub_runtime, *, include_reasoning: bool = False):
         return {"turn": {"id": "turn-1"}}
 
     stub_runtime.responses["turn/start"] = turn_start
+
+
+def test_default_formatter_supports_factory_derivation(stub_runtime):
+    model = make_model(stub_runtime)
+
+    assert isinstance(model.formatter, FormatterBase)
+    assert isinstance(model.formatter, OpenAIChatFormatter)
+    assert model.formatter.input_types == ["text/plain", "image/*"]
+    assert isinstance(_create_formatter_instance(model), FormatterBase)
 
 
 async def test_streams_text_and_reasoning_and_cleans_up(stub_runtime):

@@ -15,6 +15,7 @@ import time
 from typing import Any
 
 from agentscope.credential import CredentialBase
+from agentscope.formatter import FormatterBase, OpenAIChatFormatter
 from agentscope.message import (
     DataBlock,
     Msg,
@@ -81,6 +82,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
         context_size: int = 32768,
         message_mapper: MessageMapper | None = None,
         auth_service: AuthService | None = None,
+        formatter: FormatterBase | None = None,
     ) -> None:
         self.runtime = runtime
         self.auth_service = auth_service or AuthService(runtime)
@@ -107,6 +109,9 @@ class CodexSubscriptionChatModel(ChatModelBase):
             max_retries=max_retries,
             retry_delay=retry_delay,
             context_size=context_size,
+        )
+        self.formatter = formatter or OpenAIChatFormatter(
+            input_types=["text/plain", "image/*"],
         )
 
     async def __call__(
