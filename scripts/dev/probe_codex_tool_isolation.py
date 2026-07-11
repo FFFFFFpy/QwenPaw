@@ -77,10 +77,14 @@ async def _run_turn(
             completed.set()
 
     unsubscribe_item = runtime.subscribe(
-        "item/started", on_item, thread_id=thread_id
+        "item/started",
+        on_item,
+        thread_id=thread_id,
     )
     unsubscribe_completed = runtime.subscribe(
-        "turn/completed", on_completed, thread_id=thread_id
+        "turn/completed",
+        on_completed,
+        thread_id=thread_id,
     )
     try:
         response = await runtime.request(
@@ -89,7 +93,7 @@ async def _run_turn(
                 "threadId": thread_id,
                 "input": [{"type": "text", "text": text}],
                 "sandboxPolicy": build_restricted_sandbox_policy(
-                    runtime.capabilities
+                    runtime.capabilities,
                 ),
             },
             timeout=timeout,
@@ -139,11 +143,13 @@ async def _run(args: argparse.Namespace) -> int:
             return 0
 
         account = await runtime.request(
-            "account/read", {"refreshToken": False}, timeout=args.timeout
+            "account/read",
+            {"refreshToken": False},
+            timeout=args.timeout,
         )
         if not isinstance(account.get("account"), dict):
             raise RuntimeError(
-                "account-backed probe requires a connected account"
+                "account-backed probe requires a connected account",
             )
         models = await runtime.request(
             "model/list",
@@ -168,7 +174,7 @@ async def _run(args: argparse.Namespace) -> int:
             dynamic_calls += 1
             return {
                 "contentItems": [
-                    {"type": "inputText", "text": "isolation probe ok"}
+                    {"type": "inputText", "text": "isolation probe ok"},
                 ],
                 "success": True,
             }
@@ -176,7 +182,7 @@ async def _run(args: argparse.Namespace) -> int:
         runtime.register_server_request("item/tool/call", dynamic_tool)
         mcp_server_names = await runtime.list_mcp_server_names()
         with tempfile.TemporaryDirectory(
-            prefix="qwenpaw-codex-isolation-"
+            prefix="qwenpaw-codex-isolation-",
         ) as cwd:
             thread_response = await runtime.request(
                 "thread/start",
@@ -203,7 +209,7 @@ async def _run(args: argparse.Namespace) -> int:
                                 "type": "object",
                                 "additionalProperties": False,
                             },
-                        }
+                        },
                     ],
                 },
                 timeout=args.timeout,
@@ -220,7 +226,11 @@ async def _run(args: argparse.Namespace) -> int:
             )
             for prompt in prompts:
                 await _run_turn(
-                    runtime, thread_id, prompt, item_types, args.timeout
+                    runtime,
+                    thread_id,
+                    prompt,
+                    item_types,
+                    args.timeout,
                 )
             await runtime.request(
                 "thread/unsubscribe",
@@ -238,7 +248,7 @@ async def _run(args: argparse.Namespace) -> int:
                 "toolIsolationVerified": True,
                 "dynamicToolCalls": dynamic_calls,
                 "observedItemTypes": sorted(item_types),
-            }
+            },
         )
         if settings_path is not None:
             settings.record_tool_isolation_verification(
