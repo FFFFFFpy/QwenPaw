@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -29,7 +30,7 @@ class ChatModelSettings(BaseModel):
 class ImageModelSettings(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    size: str = Field(default="1024x1024", pattern=r"^\d+x\d+$")
+    size: Literal["1024x1024", "1536x1024", "1024x1536"] = "1024x1024"
     quality: str = Field(default="auto", pattern="^(auto|low|medium|high)$")
     output_format: str = Field(default="png", pattern="^(png|jpeg|webp)$")
     background: str = Field(

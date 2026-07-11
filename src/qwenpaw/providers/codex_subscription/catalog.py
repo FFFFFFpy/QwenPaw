@@ -58,6 +58,10 @@ _MODEL_DATA: dict[str, dict[str, Any]] = {
 }
 
 _RESPONSES_LITE_MODELS = frozenset(_MODEL_DATA)
+_AVAILABILITY = {
+    **{model_id: "unknown" for model_id in _MODEL_DATA},
+    "gpt-image-2": "unknown",
+}
 
 
 def subscription_models() -> list[ModelInfo]:
@@ -139,3 +143,12 @@ def default_reasoning_effort(model_id: str) -> str:
 
 def uses_responses_lite(model_id: str) -> bool:
     return model_id in _RESPONSES_LITE_MODELS
+
+
+def model_availability(model_id: str) -> str:
+    return _AVAILABILITY.get(model_id, "unknown")
+
+
+def record_model_availability(model_id: str, value: str) -> None:
+    if model_id in _AVAILABILITY and value in {"available", "unavailable"}:
+        _AVAILABILITY[model_id] = value

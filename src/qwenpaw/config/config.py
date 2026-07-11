@@ -1797,6 +1797,12 @@ def _default_builtin_tools() -> Dict[str, BuiltinToolConfig]:
             description="Send files to user",
             icon="📤",
         ),
+        "image_generate": BuiltinToolConfig(
+            name="image_generate",
+            enabled=True,
+            description="Generate or edit real images with GPT Image 2",
+            icon="🎨",
+        ),
         "get_current_time": BuiltinToolConfig(
             name="get_current_time",
             enabled=True,

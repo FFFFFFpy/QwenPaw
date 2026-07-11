@@ -11,7 +11,11 @@ from pydantic import PrivateAttr
 from qwenpaw.constant import SECRET_DIR
 from qwenpaw.providers.provider import ModelInfo, Provider, ProviderInfo
 
-from .catalog import subscription_models
+from .catalog import (
+    model_availability,
+    record_model_availability,
+    subscription_models,
+)
 from .errors import CodexSubscriptionError
 from .oauth import OAuthService
 from .settings import CodexSubscriptionSettings, direct_transport_enabled
@@ -66,11 +70,12 @@ class ChatGPTSubscriptionProvider(Provider):
         return self._settings
 
     def availability(self, model_id: str) -> str:
-        return self._availability.get(model_id, "unknown")
+        return model_availability(model_id)
 
     def record_availability(self, model_id: str, value: str) -> None:
         if value in {"available", "unavailable"}:
             self._availability[model_id] = value
+            record_model_availability(model_id, value)
 
     def save_settings(self) -> None:
         self._settings.save(self._settings_path)

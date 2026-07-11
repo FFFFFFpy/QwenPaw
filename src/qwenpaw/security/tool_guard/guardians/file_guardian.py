@@ -3,6 +3,7 @@
 
 Blocks tool calls that target files explicitly listed in a sensitive-file set.
 """
+
 from __future__ import annotations
 
 import ntpath
@@ -25,6 +26,7 @@ _TOOL_FILE_PARAMS: dict[str, tuple[str, ...]] = {
     "edit_file": ("file_path",),
     "append_file": ("file_path",),
     "send_file_to_user": ("file_path",),
+    "image_generate": ("image", "images"),
     # agentscope built-ins (may be enabled by users)
     "view_text_file": ("file_path", "path"),
     "write_text_file": ("file_path", "path"),
@@ -484,9 +486,13 @@ class FilePathToolGuardian(BaseToolGuardian):
         if known_params:
             for param_name in known_params:
                 raw_value = params.get(param_name)
-                if not isinstance(raw_value, str) or not raw_value.strip():
-                    continue
-                self._check_value(tool_name, param_name, raw_value, findings)
+                values = (
+                    raw_value if isinstance(raw_value, list) else [raw_value]
+                )
+                for value in values:
+                    if not isinstance(value, str) or not value.strip():
+                        continue
+                    self._check_value(tool_name, param_name, value, findings)
             return findings
 
         # All other tools: scan every string parameter that looks like a path.

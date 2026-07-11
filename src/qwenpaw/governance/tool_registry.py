@@ -171,6 +171,7 @@ def _register_builtin_tools(r: ToolRegistry) -> None:
         ("ViewImage", "image_path"),
         ("ViewVideo", "video_path"),
         ("DesktopScreenshot", "path"),
+        ("ImageGenerate", "image"),
         ("SetUserTimezone", "timezone"),
     ]:
         r.register(name, "file", param)
@@ -222,6 +223,7 @@ def _register_python_name_mappings(
         "web_fetch": "WebFetch",
         "desktop_screenshot": "DesktopScreenshot",
         "send_file_to_user": "SendFileToUser",
+        "image_generate": "ImageGenerate",
         "view_image": "ViewImage",
         "view_video": "ViewVideo",
         "get_current_time": "GetCurrentTime",
