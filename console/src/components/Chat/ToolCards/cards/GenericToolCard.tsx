@@ -9,9 +9,9 @@ import React from "react";
 import { useTranslation } from "react-i18next";
 import { ToolOutlined } from "@ant-design/icons";
 import type { ToolCallContent } from "../shared/types";
-import { ToolCardShell } from "../shared";
+import { MediaPreview, ToolCardShell } from "../shared";
 import { DefaultBlock } from "../shared";
-import { stringifyResult } from "../shared/utils";
+import { getMediaInfo, stringifyResult } from "../shared/utils";
 
 export interface GenericToolCardProps {
   content: ToolCallContent;
@@ -27,6 +27,7 @@ const GenericToolCard: React.FC<GenericToolCardProps> = ({
     ? `${content.serverLabel} / ${content.name}`
     : content.name;
   const resultText = stringifyResult(content.result);
+  const media = getMediaInfo(content);
 
   return (
     <ToolCardShell
@@ -35,6 +36,7 @@ const GenericToolCard: React.FC<GenericToolCardProps> = ({
       content={content}
       isStreaming={isStreaming}
     >
+      {media && <MediaPreview media={media} />}
       {resultText && <DefaultBlock title="Output" content={resultText} />}
     </ToolCardShell>
   );

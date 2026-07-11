@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
 import type { TFunction } from "i18next";
-import { formatAgentList, formatMemorySearch } from "./utils";
+import {
+  formatAgentList,
+  formatMemorySearch,
+  getMediaInfo,
+} from "./utils";
 
 const translate = ((key: string) => {
   const translations: Record<string, string> = {
@@ -108,5 +112,37 @@ describe("formatAgentList", () => {
       "| Coder | `agent-1` | Coding agent | ready |",
     );
     expect(formattedResult).not.toContain("|  | `` |  |  |");
+  });
+});
+
+describe("getMediaInfo", () => {
+  it("extracts generated images from DataBlock tool results", () => {
+    const media = getMediaInfo({
+      type: "tool_call",
+      id: "call-image",
+      name: "image_generate",
+      params: {},
+      status: "done",
+      result: [
+        {
+          type: "data",
+          source: {
+            type: "url",
+            url: "file:///workspace/resources/generated.png",
+            media_type: "image/png",
+          },
+          name: "generated.png",
+        },
+        { type: "text", text: '{"status":"completed"}' },
+      ],
+    });
+
+    expect(media).toMatchObject({
+      name: "generated.png",
+      type: "image",
+    });
+    expect(media?.url).toContain(
+      "/files/preview/workspace/resources/generated.png",
+    );
   });
 });

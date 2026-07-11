@@ -159,7 +159,12 @@ function extractUrlFromResultBlocks(
       if (typeof src.url === "string" && src.url) {
         return {
           url: src.url,
-          filename: typeof b.filename === "string" ? b.filename : undefined,
+          filename:
+            typeof b.filename === "string"
+              ? b.filename
+              : typeof b.name === "string"
+                ? b.name
+                : undefined,
         };
       }
     }
