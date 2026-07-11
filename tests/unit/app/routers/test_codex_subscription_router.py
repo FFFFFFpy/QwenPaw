@@ -103,3 +103,23 @@ def test_settings_api_cannot_forge_tool_isolation_verification() -> None:
 
     assert response.status_code == 422
     assert runtime.settings.tool_isolation_verified_fingerprints == [verified]
+
+
+def test_settings_api_updates_codex_dynamic_tool_mode(
+    tmp_path,
+    monkeypatch,
+) -> None:
+    from qwenpaw.app.routers import codex_subscription as router_module
+
+    monkeypatch.setattr(router_module, "SECRET_DIR", tmp_path)
+    app, runtime = _application()
+    runtime.settings = CodexSubscriptionSettings()
+
+    response = TestClient(app).put(
+        "/api/providers/openai-codex/settings",
+        json={"codex_dynamic_tool_mode": "off"},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["codex_dynamic_tool_mode"] == "off"
+    assert runtime.settings.codex_dynamic_tool_mode == "off"

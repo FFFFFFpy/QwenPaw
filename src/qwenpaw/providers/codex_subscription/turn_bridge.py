@@ -41,6 +41,9 @@ class TurnBridge:
     interrupt_result: dict[str, Any] | None = None
     cleanup_error: CodexSubscriptionError | None = None
     cleanup_complete: asyncio.Event = field(default_factory=asyncio.Event)
+    cleanup_callback: Callable[[], None] | None = None
+    diagnostics: Any = None
+    _cleanup_callback_called: bool = False
 
     def subscribe(self, methods: tuple[str, ...]) -> None:
         for method in methods:
@@ -203,6 +206,7 @@ class TurnBridge:
             self.cleanup_state = CleanupState.FAILED
             self.runtime.mark_turn_cleanup_failed(failure)
             self.cleanup_complete.set()
+            self._notify_cleanup_complete()
             raise failure
 
         self.cleanup_state = CleanupState.COMPLETED
@@ -210,6 +214,14 @@ class TurnBridge:
         if recovery_error is not None:
             self.runtime.clear_turn_cleanup_error(recovery_error)
         self.cleanup_complete.set()
+        self._notify_cleanup_complete()
+
+    def _notify_cleanup_complete(self) -> None:
+        if self._cleanup_callback_called:
+            return
+        self._cleanup_callback_called = True
+        if self.cleanup_callback is not None:
+            self.cleanup_callback()
 
 
 def _cleanup_failure(

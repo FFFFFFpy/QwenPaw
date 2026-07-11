@@ -24,6 +24,7 @@ class CodexSubscriptionSettings(BaseModel):
 
     binary_path: str = ""
     preferred_login_flow: Literal["browser", "device_code"] = "browser"
+    codex_dynamic_tool_mode: Literal["off", "all"] = "all"
     client_name: str = "qwenpaw"
     schema_cache_version: int = 1
     request_timeout_seconds: float = Field(default=30.0, gt=0, le=600)

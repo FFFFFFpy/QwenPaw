@@ -99,7 +99,10 @@ blocking remain secondary safeguards.
 Select **Sign out** on the card to ask the official App Server to clear its
 login. This does not alter other QwenPaw providers. To disable the integration,
 set `QWENPAW_CODEX_SUBSCRIPTION_ENABLED=false` and restart QwenPaw. To disable
-dynamic tools only, set `QWENPAW_CODEX_DYNAMIC_TOOLS=false`.
+dynamic tools for latency diagnosis, set the Codex subscription setting
+`codex_dynamic_tool_mode` to `off`; use `all` to restore the full catalog.
+In `off` mode QwenPaw sends no `dynamicTools` field and forces tool choice to
+`none`. This setting affects only the `openai-codex` provider.
 
 Removing QwenPaw does not delete Codex's own authentication storage. Removing
 Codex does not modify QwenPaw's other model providers.

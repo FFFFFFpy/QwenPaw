@@ -61,6 +61,7 @@ class ModelsRefreshResponse(BaseModel):
 class SettingsResponse(BaseModel):
     binary_path: str
     preferred_login_flow: Literal["browser", "device_code"]
+    codex_dynamic_tool_mode: Literal["off", "all"]
     tool_wait_timeout_seconds: float
     tool_isolation_verified_fingerprints: list[str]
 
@@ -70,6 +71,7 @@ class SettingsUpdateRequest(BaseModel):
 
     binary_path: str | None = None
     preferred_login_flow: Literal["browser", "device_code"] | None = None
+    codex_dynamic_tool_mode: Literal["off", "all"] | None = None
     tool_wait_timeout_seconds: float | None = Field(
         default=None,
         gt=0,
@@ -239,6 +241,7 @@ async def read_settings(
     return SettingsResponse(
         binary_path=settings.binary_path,
         preferred_login_flow=settings.preferred_login_flow,
+        codex_dynamic_tool_mode=settings.codex_dynamic_tool_mode,
         tool_wait_timeout_seconds=settings.tool_wait_timeout_seconds,
         tool_isolation_verified_fingerprints=(
             settings.tool_isolation_verified_fingerprints
@@ -264,6 +267,8 @@ async def update_settings(
         updates["binary_path"] = path
     if body.preferred_login_flow is not None:
         updates["preferred_login_flow"] = body.preferred_login_flow
+    if body.codex_dynamic_tool_mode is not None:
+        updates["codex_dynamic_tool_mode"] = body.codex_dynamic_tool_mode
     if body.tool_wait_timeout_seconds is not None:
         updates["tool_wait_timeout_seconds"] = body.tool_wait_timeout_seconds
     provider.runtime.settings = CodexSubscriptionSettings.model_validate(

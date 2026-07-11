@@ -9,10 +9,10 @@ import asyncio
 from collections.abc import AsyncGenerator
 import hashlib
 import logging
-import os
 import tempfile
 import time
 from typing import Any
+import uuid
 
 from agentscope.credential import CredentialBase
 from agentscope.formatter import FormatterBase, OpenAIChatFormatter
@@ -32,6 +32,7 @@ from agentscope.model import (
 from pydantic import BaseModel
 
 from .auth_service import AuthService
+from .diagnostics import CodexCallDiagnostics, active_turn_registry
 from .errors import CodexSubscriptionError
 from .message_mapper import MessageMapper
 from .payload_budget import TurnPayloadBudget
@@ -101,6 +102,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
         self._starting_turn = False
         self._cleanup_bridge: TurnBridge | None = None
         self._cleanup_barrier: asyncio.Task[None] | None = None
+        self.model_instance_id = uuid.uuid4().hex
         super().__init__(
             credential=credential,
             model=model,
@@ -145,6 +147,8 @@ class CodexSubscriptionChatModel(ChatModelBase):
         tool_choice: Any | None = None,
         **generate_kwargs: Any,
     ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+        explicit_session_id = generate_kwargs.pop("session_id", None)
+        session_id = _resolve_session_id(explicit_session_id, self)
         await self._await_cleanup_barrier()
         if self._active_turn is not None:
             bridge = self._active_turn
@@ -178,11 +182,33 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 "supported",
             )
 
+        dynamic_tool_mode = getattr(
+            self.runtime.settings,
+            "codex_dynamic_tool_mode",
+            "all",
+        )
+        if dynamic_tool_mode == "off":
+            tools = None
+            tool_choice = "none"
         dynamic_tools = format_dynamic_tools(tools) if tools else []
         dynamic_tools, tool_instruction = _apply_tool_choice(
             dynamic_tools,
             tool_choice,
         )
+        diagnostics = CodexCallDiagnostics(
+            session_id=session_id,
+            model_instance_id=self.model_instance_id,
+            model_id=model_name,
+            reasoning_effort=(
+                generate_kwargs.get("reasoning_effort")
+                or getattr(self.parameters, "reasoning_effort", None)
+            ),
+            dynamic_tool_count=len(dynamic_tools),
+            message_count=len(messages),
+            message_text_bytes=_message_text_bytes(messages),
+        )
+        diagnostics.emit("call_enter")
+        active_turn_registry.acquire(diagnostics)
         self._starting_turn = True
         stream = self._stream_new_turn(
             model_name,
@@ -190,6 +216,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
             generate_kwargs,
             dynamic_tools,
             tool_instruction,
+            diagnostics,
         )
         return await self._maybe_collect(stream)
 
@@ -215,12 +242,22 @@ class CodexSubscriptionChatModel(ChatModelBase):
         generate_kwargs: dict[str, Any],
         dynamic_tools: list[dict[str, Any]],
         tool_instruction: str,
+        diagnostics: CodexCallDiagnostics,
     ) -> AsyncGenerator[ChatResponse, None]:
         temporary = tempfile.TemporaryDirectory(prefix="qwenpaw-codex-turn-")
         bridge: TurnBridge | None = None
+        registry_released = False
+
+        def cleanup_completed() -> None:
+            nonlocal registry_released
+            diagnostics.emit("cleanup_completed")
+            active_turn_registry.release(diagnostics)
+            registry_released = True
+
         try:
             if self.runtime.state is not RuntimeState.READY:
                 await self.runtime.start()
+            diagnostics.emit("runtime_ready")
             capabilities = self.runtime.capabilities
             if capabilities is None:
                 raise CodexSubscriptionError(
@@ -238,15 +275,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                     ),
                 )
             if dynamic_tools:
-                disabled = os.getenv(
-                    "QWENPAW_CODEX_DYNAMIC_TOOLS",
-                    "auto",
-                ).lower()
-                if (
-                    disabled in {"0", "false", "no", "off"}
-                    or capabilities is None
-                    or not capabilities.dynamic_tools
-                ):
+                if not capabilities.dynamic_tools:
                     raise CodexSubscriptionError(
                         "CODEX_TOOL_BRIDGE_UNSUPPORTED",
                         "The installed Codex App Server does not support "
@@ -254,6 +283,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                     )
 
             account = await self.auth_service.read_account()
+            diagnostics.emit("account_ready")
             if not account.connected:
                 raise CodexSubscriptionError(
                     "CODEX_NOT_LOGGED_IN",
@@ -264,6 +294,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 "model/list",
                 {"limit": 100, "includeHidden": False},
             )
+            diagnostics.emit("model_list_ready")
             model_row = next(
                 (
                     item
@@ -297,6 +328,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 getattr(self.parameters, "reasoning_effort", None),
                 model_row,
             )
+            diagnostics.reasoning_effort = effort
             thread_params: dict[str, Any] = {
                 "model": model_name,
                 "cwd": temporary.name,
@@ -333,6 +365,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 thread_params,
                 attachment_count=attachment_count,
             )
+            diagnostics.emit("thread_start_sent")
             thread_response = await self.runtime.request(
                 "thread/start",
                 thread_params,
@@ -344,8 +377,12 @@ class CodexSubscriptionChatModel(ChatModelBase):
                     "CODEX_PROTOCOL_INCOMPATIBLE",
                     "Codex did not return a thread identifier",
                 )
+            diagnostics.thread_id = thread_id
+            diagnostics.emit("thread_start_ack")
 
             bridge = TurnBridge(self.runtime, thread_id, temporary)
+            bridge.cleanup_callback = cleanup_completed
+            bridge.diagnostics = diagnostics
             bridge.subscribe(
                 (
                     "item/agentMessage/delta",
@@ -381,6 +418,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 attachment_count=attachment_count,
             )
             try:
+                diagnostics.emit("turn_start_sent")
                 turn_response = await self.runtime.request(
                     "turn/start",
                     turn_params,
@@ -398,6 +436,8 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 bridge.fail_turn_start(error)
                 raise error
             bridge.bind_turn(turn_id)
+            diagnostics.turn_id = turn_id
+            diagnostics.emit("turn_start_ack")
             self._active_turn = bridge
             logger.info(
                 "Codex turn started generation=%s model=%s thread=%s "
@@ -417,6 +457,10 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 await asyncio.shield(task)
             elif bridge is None and self._active_turn is None:
                 temporary.cleanup()
+            if not registry_released and (
+                bridge is None or bridge.cleanup_task is None
+            ):
+                cleanup_completed()
 
     async def _consume_turn(
         self,
@@ -492,6 +536,8 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 if method == "item/agentMessage/delta":
                     delta = params.get("delta")
                     if isinstance(delta, str) and delta:
+                        if bridge.diagnostics is not None:
+                            bridge.diagnostics.emit("first_text_delta")
                         yield ChatResponse(
                             content=[
                                 TextBlock(
@@ -505,6 +551,12 @@ class CodexSubscriptionChatModel(ChatModelBase):
                         )
                 elif method == "item/reasoning/summaryTextDelta":
                     delta = params.get("delta")
+                    if (
+                        isinstance(delta, str)
+                        and delta
+                        and bridge.diagnostics is not None
+                    ):
+                        bridge.diagnostics.emit("first_reasoning_delta")
                     if (
                         self.relay_reasoning
                         and isinstance(delta, str)
@@ -555,6 +607,8 @@ class CodexSubscriptionChatModel(ChatModelBase):
                     if turn.get("id") != bridge.turn_id:
                         continue
                     status = turn.get("status")
+                    if bridge.diagnostics is not None:
+                        bridge.diagnostics.emit("turn_completed")
                     if status == "failed":
                         raise _map_turn_error(turn.get("error"), model_name)
                     completed = True
@@ -702,7 +756,11 @@ def _apply_tool_choice(
 ) -> tuple[list[dict[str, Any]], str]:
     if tool_choice is None:
         return tools, ""
-    mode = getattr(tool_choice, "mode", None)
+    mode = (
+        tool_choice
+        if isinstance(tool_choice, str)
+        else getattr(tool_choice, "mode", None)
+    )
     allowed = getattr(tool_choice, "tools", None)
     if mode == "none":
         return [], ""
@@ -737,6 +795,30 @@ def _apply_tool_choice(
 
 def _short_id(value: str) -> str:
     return hashlib.sha256(value.encode()).hexdigest()[:10]
+
+
+def _resolve_session_id(value: Any, model: Any) -> str:
+    if isinstance(value, str) and value:
+        return value
+    try:
+        from qwenpaw.app.agent_context import get_current_session_id
+
+        current = get_current_session_id()
+        if current:
+            return current
+    except Exception:  # pragma: no cover - context is optional in scripts
+        pass
+    return f"unscoped:{model.model_instance_id}"
+
+
+def _message_text_bytes(messages: list[Msg]) -> int:
+    total = 0
+    for message in messages:
+        for block in message.get_content_blocks("text"):
+            text = getattr(block, "text", None)
+            if isinstance(text, str):
+                total += len(text.encode("utf-8"))
+    return total
 
 
 def _map_turn_error(value: object, model_name: str) -> CodexSubscriptionError:
