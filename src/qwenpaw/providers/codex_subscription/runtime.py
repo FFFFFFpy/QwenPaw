@@ -138,6 +138,13 @@ class CodexAppServerRuntime:
         while self._background_tasks:
             tasks = tuple(self._background_tasks)
             await asyncio.gather(*tasks, return_exceptions=True)
+            # Python 3.13 may resume this waiter before task done-callbacks
+            # have discarded the completed snapshot. Remove it explicitly so
+            # repeatedly gathering already-finished tasks cannot starve those
+            # callbacks in a busy loop. Yield once so error observers run
+            # before the drain is reported complete.
+            self._background_tasks.difference_update(tasks)
+            await asyncio.sleep(0)
 
     def mark_turn_cleanup_failed(
         self,
