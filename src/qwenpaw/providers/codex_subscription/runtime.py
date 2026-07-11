@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
 from enum import Enum
 import logging
 from pathlib import Path
@@ -63,6 +64,9 @@ class CodexAppServerRuntime:
         self._rpc: JsonRpcClient | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._monitor_task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._background_errors: list[BaseException] = []
+        self._turn_cleanup_error: CodexSubscriptionError | None = None
         self._stopping = False
         self.initialize_result: dict[str, Any] = {}
         self.capabilities: CodexCapabilities | None = None
@@ -82,6 +86,69 @@ class CodexAppServerRuntime:
                 "Codex App Server is not initialized",
             )
         return self._rpc
+
+    @property
+    def background_task_count(self) -> int:
+        return len(self._background_tasks)
+
+    @property
+    def background_errors(self) -> tuple[BaseException, ...]:
+        return tuple(self._background_errors)
+
+    @property
+    def turn_cleanup_error(self) -> CodexSubscriptionError | None:
+        return self._turn_cleanup_error
+
+    def create_background_task(
+        self,
+        coroutine: Coroutine[Any, Any, Any],
+        *,
+        name: str,
+    ) -> asyncio.Task[Any]:
+        """Create a runtime-owned task whose completion is always observed."""
+
+        task = asyncio.create_task(coroutine, name=name)
+        self._background_tasks.add(task)
+
+        def completed(done: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            error = done.exception()
+            if error is not None:
+                self._background_errors.append(error)
+                logger.warning(
+                    "Codex background task failed generation=%s task=%s",
+                    self.generation_id,
+                    done.get_name(),
+                )
+
+        task.add_done_callback(completed)
+        return task
+
+    async def wait_background_tasks(self) -> None:
+        """Wait for runtime-owned tasks, including spawned cleanup, to end."""
+
+        while self._background_tasks:
+            tasks = tuple(self._background_tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
+
+    def mark_turn_cleanup_failed(
+        self,
+        error: CodexSubscriptionError,
+    ) -> None:
+        self._turn_cleanup_error = error
+
+    def clear_turn_cleanup_error(
+        self,
+        error: CodexSubscriptionError | None = None,
+    ) -> None:
+        if error is None or self._turn_cleanup_error is error:
+            self._turn_cleanup_error = None
+
+    def assert_turn_start_allowed(self) -> None:
+        if self._turn_cleanup_error is not None:
+            raise self._turn_cleanup_error
 
     async def start(self) -> None:
         async with self._state_lock:
@@ -169,6 +236,8 @@ class CodexAppServerRuntime:
                     },
                 )
                 await self._rpc.notify("initialized", {})
+                self._turn_cleanup_error = None
+                self._background_errors.clear()
                 self._state = RuntimeState.READY
                 logger.info(
                     "Codex runtime ready generation=%s version=%s schema=%s "
@@ -206,6 +275,14 @@ class CodexAppServerRuntime:
 
     async def stop(self) -> None:
         async with self._state_lock:
+            if (
+                self._state is RuntimeState.STOPPED
+                and not self._background_tasks
+            ):
+                return
+            # Cleanup requests need a READY RPC connection. Drain them before
+            # transitioning the runtime to STOPPING or closing stdio.
+            await self.wait_background_tasks()
             if self._state is RuntimeState.STOPPED:
                 return
             self._state = RuntimeState.STOPPING

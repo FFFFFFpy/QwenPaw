@@ -33,7 +33,7 @@ from .message_mapper import MessageMapper
 from .runtime import CodexAppServerRuntime, RuntimeState
 from .schema_capabilities import build_restricted_sandbox_policy
 from .tool_bridge import format_dynamic_tools
-from .turn_bridge import TurnBridge
+from .turn_bridge import CleanupState, TurnBridge
 
 logger = logging.getLogger(__name__)
 
@@ -78,6 +78,8 @@ class CodexSubscriptionChatModel(ChatModelBase):
         self.message_mapper = message_mapper or MessageMapper()
         self._active_turn: TurnBridge | None = None
         self._starting_turn = False
+        self._cleanup_bridge: TurnBridge | None = None
+        self._cleanup_barrier: asyncio.Task[None] | None = None
         super().__init__(
             credential=credential,
             model=model,
@@ -119,6 +121,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
         tool_choice: Any | None = None,
         **generate_kwargs: Any,
     ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+        await self._await_cleanup_barrier()
         if self._active_turn is not None:
             bridge = self._active_turn
             tool_bridge = bridge.tool_bridge
@@ -129,15 +132,17 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 )
             if tool_bridge.terminal_error:
                 error = tool_bridge.terminal_error
-                await bridge.cleanup(interrupt=True)
+                task = self._track_cleanup(bridge, interrupt=True)
                 self._active_turn = None
+                await asyncio.shield(task)
                 raise error
             results = _extract_tool_results(messages)
             try:
                 tool_bridge.submit_results(results)
             except Exception:
-                await bridge.cleanup(interrupt=True)
+                task = self._track_cleanup(bridge, interrupt=True)
                 self._active_turn = None
+                await asyncio.shield(task)
                 raise
             stream = self._consume_turn(bridge, model_name)
             return await self._maybe_collect(stream)
@@ -320,7 +325,9 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 active_bridge = bridge
 
                 def on_tool_timeout() -> None:
-                    asyncio.create_task(self._tool_timeout(active_bridge))
+                    self._track_cleanup(active_bridge, interrupt=True)
+                    if self._active_turn is active_bridge:
+                        self._active_turn = None
 
                 bridge.enable_tools(
                     names,
@@ -342,7 +349,8 @@ class CodexSubscriptionChatModel(ChatModelBase):
         finally:
             self._starting_turn = False
             if bridge is not None and self._active_turn is not bridge:
-                await bridge.cleanup(interrupt=True)
+                task = self._track_cleanup(bridge, interrupt=True)
+                await asyncio.shield(task)
             elif bridge is None and self._active_turn is None:
                 temporary.cleanup()
 
@@ -513,19 +521,62 @@ class CodexSubscriptionChatModel(ChatModelBase):
             if not keep_active:
                 current = asyncio.current_task()
                 cancelling = bool(current and current.cancelling())
-                if cancelling:
-                    asyncio.create_task(
-                        bridge.cleanup(interrupt=not completed),
-                    )
-                else:
-                    await bridge.cleanup(interrupt=not completed)
+                task = self._track_cleanup(
+                    bridge,
+                    interrupt=not completed,
+                )
                 if self._active_turn is bridge:
                     self._active_turn = None
+                if not cancelling:
+                    await asyncio.shield(task)
 
-    async def _tool_timeout(self, bridge: TurnBridge) -> None:
-        await bridge.cleanup(interrupt=True)
-        if self._active_turn is bridge:
-            self._active_turn = None
+    def _track_cleanup(
+        self,
+        bridge: TurnBridge,
+        *,
+        interrupt: bool,
+        retry: bool = False,
+    ) -> asyncio.Task[None]:
+        task = bridge.start_cleanup(interrupt=interrupt, retry=retry)
+        self._cleanup_bridge = bridge
+        self._cleanup_barrier = task
+        return task
+
+    async def _await_cleanup_barrier(self) -> None:
+        task = self._cleanup_barrier
+        if task is not None:
+            # A successful runtime restart is an explicit recovery boundary.
+            if (
+                task.done()
+                and self.runtime.turn_cleanup_error is None
+                and self._cleanup_bridge is not None
+                and self._cleanup_bridge.cleanup_state is CleanupState.FAILED
+            ):
+                self._cleanup_barrier = None
+                self._cleanup_bridge = None
+            else:
+                await asyncio.shield(task)
+                if self._cleanup_barrier is task:
+                    self._cleanup_barrier = None
+                    self._cleanup_bridge = None
+        self.runtime.assert_turn_start_allowed()
+
+    async def retry_cleanup(self) -> None:
+        """Explicitly retry a failed cleanup before accepting a new turn."""
+
+        bridge = self._cleanup_bridge
+        if bridge is None:
+            self.runtime.assert_turn_start_allowed()
+            return
+        task = self._track_cleanup(
+            bridge,
+            interrupt=True,
+            retry=True,
+        )
+        await asyncio.shield(task)
+        if self._cleanup_barrier is task:
+            self._cleanup_barrier = None
+            self._cleanup_bridge = None
 
 
 def _extract_tool_results(messages: list[Msg]) -> list[ToolResultBlock]:

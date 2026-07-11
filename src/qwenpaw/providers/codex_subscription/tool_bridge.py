@@ -244,6 +244,10 @@ class ToolBridgeRegistry:
         self._bridges: dict[str, ToolTurnBridge] = {}
         self._registered_generation = ""
 
+    @property
+    def active_count(self) -> int:
+        return len(self._bridges)
+
     def add(self, bridge: ToolTurnBridge) -> None:
         if bridge.thread_id in self._bridges:
             raise CodexSubscriptionError(
