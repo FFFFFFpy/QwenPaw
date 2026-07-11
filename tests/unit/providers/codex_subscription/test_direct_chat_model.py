@@ -1,7 +1,9 @@
+import asyncio
 import time
 
 import pytest
 from agentscope.message import SystemMsg, TextBlock, UserMsg
+from agentscope.model import FinishedReason
 
 from qwenpaw.providers.codex_subscription.chat_model import (
     ChatGPTSubscriptionChatModel,
@@ -265,3 +267,51 @@ async def test_availability_changes_only_for_success_and_permission(tmp_path):
     with pytest.raises(CodexSubscriptionError):
         [chunk async for chunk in response]
     assert updates == [("gpt-5.6-luna", "unavailable")]
+
+
+@pytest.mark.asyncio
+async def test_cancellation_finishes_as_interrupted(tmp_path):
+    store = TokenStore(tmp_path / "oauth.enc")
+    store.save(
+        TokenRecord(
+            account_local_id="default",
+            access_token="access",
+            refresh_token="refresh",
+            account_id="acct",
+            expires_at=time.time() + 3600,
+            last_refresh_at=time.time(),
+        )
+    )
+
+    class BlockingHTTP:
+        async def stream(self, **kwargs):
+            class BlockingResponse:
+                async def aiter_lines(self):
+                    await asyncio.Event().wait()
+                    yield ""  # pragma: no cover
+
+            yield BlockingResponse()
+
+    model = ChatGPTSubscriptionChatModel(
+        credential=CodexSubscriptionCredential(id="test", name="test"),
+        model="gpt-5.6-luna",
+        parameters=ChatGPTSubscriptionChatModel.Parameters(),
+        token_store=store,
+        oauth_service=OAuthService(store),
+        http_client=BlockingHTTP(),
+    )
+    response = await model(
+        [UserMsg(name="user", content=[TextBlock(text="long response")])]
+    )
+    chunks = []
+
+    async def consume():
+        async for chunk in response:
+            chunks.append(chunk)
+
+    task = asyncio.create_task(consume())
+    await asyncio.sleep(0)
+    task.cancel()
+    await task
+    assert chunks[-1].is_last
+    assert chunks[-1].finished_reason == FinishedReason.INTERRUPTED

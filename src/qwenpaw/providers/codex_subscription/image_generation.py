@@ -105,7 +105,6 @@ class ImageGenerationService:
                     "quality": quality,
                     "output_format": output_format,
                     "background": background,
-                    "n": count,
                 }
             ],
             "tool_choice": {"type": "image_generation"},
@@ -115,20 +114,26 @@ class ImageGenerationService:
         }
         record = await self.token_store.get_valid(self.oauth_service.refresh)
         stale_token = record.access_token.get_secret_value()
-        try:
-            images = await self._request(body, record)
-        except CodexSubscriptionError as exc:
-            if exc.status_code == 401:
-                record = await self.token_store.get_valid(
-                    self.oauth_service.refresh,
-                    force_refresh=True,
-                    stale_access_token=stale_token,
-                )
-                images = await self._request(body, record)
-            else:
-                if exc.status_code in {403, 404}:
-                    record_model_availability("gpt-image-2", "unavailable")
-                raise
+        images: list[GeneratedImage] = []
+        refreshed_after_401 = False
+        for _ in range(count):
+            try:
+                images.extend(await self._request(body, record))
+            except CodexSubscriptionError as exc:
+                if exc.status_code == 401 and not refreshed_after_401:
+                    record = await self.token_store.get_valid(
+                        self.oauth_service.refresh,
+                        force_refresh=True,
+                        stale_access_token=stale_token,
+                    )
+                    refreshed_after_401 = True
+                    images.extend(await self._request(body, record))
+                else:
+                    if exc.status_code in {403, 404}:
+                        record_model_availability("gpt-image-2", "unavailable")
+                    raise
+            if len(images) >= count:
+                break
         if not images:
             raise CodexSubscriptionError(
                 "CODEX_IMAGE_EMPTY", "ChatGPT returned no generated image"
@@ -150,6 +155,7 @@ class ImageGenerationService:
                 body=body,
                 access_token=record.access_token.get_secret_value(),
                 account_id=record.account_id.get_secret_value(),
+                responses_lite=False,
             ):
 
                 async def limited_lines():

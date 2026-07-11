@@ -46,7 +46,12 @@ class CodexResponsesHTTPClient:
         self.timeout = timeout
 
     async def stream(
-        self, *, body: dict[str, Any], access_token: str, account_id: str
+        self,
+        *,
+        body: dict[str, Any],
+        access_token: str,
+        account_id: str,
+        responses_lite: bool | None = None,
     ) -> AsyncIterator[httpx.Response]:
         own = self._client is None
         client = self._client or httpx.AsyncClient(
@@ -70,7 +75,12 @@ class CodexResponsesHTTPClient:
             ),
         }
         model = body.get("model")
-        if isinstance(model, str) and uses_responses_lite(model):
+        use_lite = (
+            uses_responses_lite(model)
+            if responses_lite is None and isinstance(model, str)
+            else bool(responses_lite)
+        )
+        if use_lite:
             headers["x-openai-internal-codex-responses-lite"] = "true"
         try:
             async with client.stream(

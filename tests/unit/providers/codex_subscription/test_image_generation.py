@@ -100,6 +100,7 @@ async def test_generates_valid_raster_formats(
     assert images[0].revised_prompt == "refined"
     assert http.body["model"] == "gpt-5.6-sol"
     assert http.body["tools"][0]["model"] == "gpt-image-2"
+    assert "n" not in http.body["tools"][0]
     assert http.body["tool_choice"] == {"type": "image_generation"}
     assert http.body["store"] is False
 

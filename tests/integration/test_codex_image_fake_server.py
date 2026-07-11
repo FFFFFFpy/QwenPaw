@@ -111,6 +111,7 @@ async def test_image_generation_over_real_sse_transport(tmp_path):
     assert images[0].mime_type == "image/png"
     assert received["headers"]["authorization"] == "Bearer access"
     assert received["headers"]["chatgpt-account-id"] == "account"
+    assert "x-openai-internal-codex-responses-lite" not in received["headers"]
     assert received["body"]["tools"][0]["model"] == "gpt-image-2"
     assert received["body"]["tools"][0]["background"] == "transparent"
     assert received["body"]["store"] is False

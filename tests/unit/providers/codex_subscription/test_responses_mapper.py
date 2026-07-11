@@ -9,6 +9,7 @@ from agentscope.message import (
     ToolCallBlock,
     ToolResultBlock,
     UserMsg,
+    HintBlock,
 )
 
 from qwenpaw.providers.codex_subscription.responses_mapper import (
@@ -115,3 +116,26 @@ async def test_formatter_preserves_tool_text_order_and_assistant_output_text():
         "type": "output_text",
         "text": "after",
     }
+
+
+@pytest.mark.asyncio
+async def test_hint_block_is_promoted_after_history_deserialization():
+    message = Msg.model_construct(
+        name="user",
+        role="user",
+        content=[
+            TextBlock(text="visible"),
+            HintBlock(hint=[TextBlock(text="hinted")]),
+        ],
+    )
+    formatted = await _CappingOpenAIResponseFormatter().format([message])
+    assert formatted == [
+        {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "visible"}],
+        },
+        {
+            "role": "user",
+            "content": [{"type": "input_text", "text": "hinted"}],
+        },
+    ]

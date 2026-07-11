@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import AsyncGenerator
 import time
 from typing import Any, Callable
@@ -194,6 +195,21 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                 )
                 if self.availability_callback:
                     self.availability_callback(str(body["model"]), "available")
+                return
+            except asyncio.CancelledError:
+                interrupted = ChatResponse(
+                    content=[],
+                    is_last=True,
+                )
+                # AgentScope's DictMixin currently drops non-default enum
+                # dataclass arguments during construction. Set the terminal
+                # reason explicitly so cancellation is observable upstream.
+                object.__setattr__(
+                    interrupted,
+                    "finished_reason",
+                    FinishedReason.INTERRUPTED,
+                )
+                yield interrupted
                 return
             except httpx.HTTPError as exc:
                 if emitted_any or emitted_tool_call:
