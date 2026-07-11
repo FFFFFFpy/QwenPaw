@@ -14,9 +14,11 @@ the source of truth; this file is a deliberately small compatibility contract.
 - Experimental v2 schema SHA-256:
   `f54352a19bec547cede4886b9b3f2ec1995ef5e4815efe435f9ed0d4b8a739ba`
 
-That observed schema did not expose the restricted readable-root shape required
-by QwenPaw and is therefore incompatible for chat. A fingerprint records
-identity, not compatibility. Regenerate schema evidence with:
+That observed schema exposes `thread/start.sandbox` as `SandboxMode` and the
+structured policy under `turn/start.sandboxPolicy`. Its `readOnly` policy has
+`type` and `networkAccess`, but no restricted-readable-roots field. A
+fingerprint records identity, not verified tool isolation. Regenerate schema
+evidence with:
 
 ```bash
 codex app-server generate-ts --experimental --out /tmp/codex-schema/ts
@@ -54,7 +56,11 @@ does not opt into attestation or MCP elicitation.
 | Turn interruption | supported | `turn/interrupt` requires `threadId` and `turnId` |
 | Event unsubscription | supported | `thread/unsubscribe` |
 | Dynamic tools | experimental | `thread/start.dynamicTools`; server request `item/tool/call` |
-| Restricted file reads and disabled network | required | structured `thread/start.sandbox` must bind readable roots to the isolated cwd and set `networkAccess=false`; string sandbox modes are rejected as incompatible |
+| MCP inventory | required for isolation | paginated `mcpServerStatus/list`; QwenPaw retains names only and disables every returned server in the thread override |
+| Thread sandbox mode | required | `thread/start.sandbox` accepts `read-only` |
+| Turn sandbox policy | required | `turn/start.sandboxPolicy` accepts `{type: readOnly, networkAccess: false}` |
+| Built-in tool isolation | release gate | `thread/start.config` disables Shell, Web, MCP, Apps, Plugins, Browser/Computer Use, image generation, and sub-agents; verification requires an account-backed probe |
+| Environment-backed tools | required | `thread/start.environments=[]` removes Shell, patch, image-view, and permission tools for the thread |
 | Built-in side-effect requests | explicitly rejected | command/file/patch/permission/MCP approval methods have registered denial handlers |
 | Thread archive | supported | `thread/archive`; QwenPaw normally uses unsubscribe for ephemeral cycles |
 
@@ -67,9 +73,10 @@ uses description text, substring occurrence, or a version threshold.
 
 Initialization, account read/login/logout, model listing, thread start and
 unsubscribe, turn start and interrupt, agent-message deltas, and turn
-completion are required. Missing any of these, restricted readable roots, or
-network disable makes the Runtime incompatible before App Server startup or a
-real turn.
+completion are required. Missing the real thread sandbox mode, turn sandbox
+policy, network-disable field, or thread config overrides makes the Runtime
+incompatible. Schema compatibility alone does not enable real chat; the
+installed fingerprint must also pass the tool-isolation probe.
 
 ## Focused message contract
 
@@ -79,9 +86,9 @@ real turn.
   never sends API keys or externally managed ChatGPT tokens.
 - `model/list` is paginated. Hidden entries are excluded. Model IDs are never
   supplied from a static fallback table.
-- A generation creates an ephemeral thread with an isolated cwd and a
-  structured read-only sandbox whose only readable root is that cwd and whose
-  network access is disabled, then calls `turn/start`.
+- A generation creates an ephemeral thread with an isolated cwd,
+  `sandbox=read-only`, and built-in-tool config overrides. `turn/start` carries
+  the structured `{type: readOnly, networkAccess: false}` policy.
 - Text and reasoning notifications must match the active thread and turn.
 - `turn/completed.turn.status` is one of `completed`, `interrupted`, `failed`,
   or `inProgress`; a failed turn carries a structured error.
@@ -97,10 +104,11 @@ real turn.
 
 ## Security boundary
 
-The structured sandbox is the primary file and network boundary. Detection of
-unexpected `item/started` command, file, web, or MCP events remains a secondary
-fuse that interrupts a protocol-violating turn; it is not treated as the
-permission system. Developer instructions are defense in depth only.
+Disabling every Codex built-in side-effect tool is the primary boundary.
+Detection of unexpected `item/started` command, file, web, MCP, browser,
+computer-use, image-generation, or sub-agent events remains a secondary fuse
+that interrupts a protocol-violating turn. Approval denial and developer
+instructions are defense in depth only.
 
 The probe and provider never read or parse `~/.codex/auth.json`. Authentication
 storage and token refresh remain exclusively owned by the official App Server.

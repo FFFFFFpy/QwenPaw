@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -185,6 +186,7 @@ async def test_concurrent_threads_route_tool_results_without_cross_talk(
         event_queue=second_events,
     )
     registry = get_tool_registry(stub_runtime)
+    registry.bind_generation()
     registry.add(first)
     registry.add(second)
     one = asyncio.create_task(
@@ -237,3 +239,76 @@ async def test_concurrent_threads_route_tool_results_without_cross_talk(
     one_result, two_result = await asyncio.gather(one, two)
     assert one_result["contentItems"][0]["text"] == "one"
     assert two_result["contentItems"][0]["text"] == "two"
+
+
+async def test_provisional_bridge_waits_for_turn_binding(stub_runtime):
+    events: asyncio.Queue = asyncio.Queue()
+    bridge = ToolTurnBridge(
+        thread_id="thread-early",
+        turn_id=None,
+        tool_names={"lookup"},
+        event_queue=events,
+    )
+    registry = get_tool_registry(stub_runtime)
+    registry.bind_generation()
+    registry.add(bridge)
+    request = asyncio.create_task(
+        stub_runtime.server_request(
+            "item/tool/call",
+            {
+                "threadId": "thread-early",
+                "turnId": "turn-early",
+                "callId": "call-early",
+                "tool": "lookup",
+                "arguments": {},
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    assert events.empty()
+
+    bridge.bind_turn("turn-early")
+    _, payload = await events.get()
+    bridge.submit_results(
+        [
+            ToolResultBlock(
+                id=payload["qwenpawCallId"],
+                name="lookup",
+                output="bound",
+                state=ToolResultState.SUCCESS,
+            ),
+        ],
+    )
+    assert (await request)["success"] is True
+
+
+async def test_provisional_bridge_releases_request_on_turn_failure(
+    stub_runtime,
+):
+    bridge = ToolTurnBridge(
+        thread_id="thread-failed",
+        turn_id=None,
+        tool_names={"lookup"},
+        event_queue=asyncio.Queue(),
+    )
+    registry = get_tool_registry(stub_runtime)
+    registry.bind_generation()
+    registry.add(bridge)
+    request = asyncio.create_task(
+        stub_runtime.server_request(
+            "item/tool/call",
+            {
+                "threadId": "thread-failed",
+                "turnId": "turn-never-started",
+                "callId": "call-failed",
+                "tool": "lookup",
+                "arguments": {},
+            },
+        ),
+    )
+    await asyncio.sleep(0)
+    failure = CodexSubscriptionError("CODEX_TURN_FAILED", "turn/start failed")
+    bridge.fail_turn_start(failure)
+    with pytest.raises(CodexSubscriptionError) as caught:
+        await request
+    assert caught.value is failure

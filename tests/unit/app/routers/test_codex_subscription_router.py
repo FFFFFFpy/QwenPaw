@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -8,6 +9,9 @@ from fastapi.testclient import TestClient
 from qwenpaw.app.routers.codex_subscription import router
 from qwenpaw.providers.codex_subscription.provider import (
     CodexSubscriptionProvider,
+)
+from qwenpaw.providers.codex_subscription.settings import (
+    CodexSubscriptionSettings,
 )
 from tests.unit.providers.codex_subscription.conftest import StubRuntime
 
@@ -83,3 +87,19 @@ def test_browser_login_uses_dedicated_app_server_flow() -> None:
             "appBrand": "chatgpt",
         },
     ) in runtime.requests
+
+
+def test_settings_api_cannot_forge_tool_isolation_verification() -> None:
+    app, runtime = _application()
+    verified = "a" * 64
+    runtime.settings = CodexSubscriptionSettings(
+        tool_isolation_verified_fingerprints=[verified],
+    )
+
+    response = TestClient(app).put(
+        "/api/providers/openai-codex/settings",
+        json={"tool_isolation_verified_fingerprints": ["b" * 64]},
+    )
+
+    assert response.status_code == 422
+    assert runtime.settings.tool_isolation_verified_fingerprints == [verified]

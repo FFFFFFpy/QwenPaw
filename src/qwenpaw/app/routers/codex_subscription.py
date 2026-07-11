@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Dedicated API for the built-in OpenAI Codex subscription provider."""
 
 from __future__ import annotations
@@ -5,7 +6,7 @@ from __future__ import annotations
 from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from qwenpaw.constant import SECRET_DIR
 from qwenpaw.providers.codex_subscription.auth_service import (
@@ -61,9 +62,12 @@ class SettingsResponse(BaseModel):
     binary_path: str
     preferred_login_flow: Literal["browser", "device_code"]
     tool_wait_timeout_seconds: float
+    tool_isolation_verified_fingerprints: list[str]
 
 
 class SettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     binary_path: str | None = None
     preferred_login_flow: Literal["browser", "device_code"] | None = None
     tool_wait_timeout_seconds: float | None = Field(
@@ -236,6 +240,9 @@ async def read_settings(
         binary_path=settings.binary_path,
         preferred_login_flow=settings.preferred_login_flow,
         tool_wait_timeout_seconds=settings.tool_wait_timeout_seconds,
+        tool_isolation_verified_fingerprints=(
+            settings.tool_isolation_verified_fingerprints
+        ),
     )
 
 
@@ -260,7 +267,7 @@ async def update_settings(
     if body.tool_wait_timeout_seconds is not None:
         updates["tool_wait_timeout_seconds"] = body.tool_wait_timeout_seconds
     provider.runtime.settings = CodexSubscriptionSettings.model_validate(
-        updates
+        updates,
     )
     settings_path = SECRET_DIR / "codex_subscription" / "settings.json"
     provider.runtime.settings.save(settings_path)

@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Deterministic full-payload budgeting for Codex turns."""
 
 from __future__ import annotations
@@ -8,42 +9,41 @@ from .errors import CodexSubscriptionError
 from .rpc_client import encode_json_message
 
 
+MAX_REQUEST_ID_PLACEHOLDER = 9_223_372_036_854_775_807
+
+
 class TurnPayloadBudget:
-    """Budget the complete thread/turn plan with JSON-RPC wire encoding."""
+    """Budget each actual JSON-RPC request with wire encoding."""
 
     def __init__(self, limit_bytes: int) -> None:
         self.limit_bytes = limit_bytes
 
     @staticmethod
     def measure(
-        thread_params: dict[str, Any],
-        turn_params: dict[str, Any],
+        method: str,
+        params: dict[str, Any],
     ) -> int:
-        plan = {
-            "threadStart": {
-                "method": "thread/start",
-                "params": thread_params,
-            },
-            "turnStart": {
-                "method": "turn/start",
-                "params": turn_params,
-            },
+        request = {
+            "id": MAX_REQUEST_ID_PLACEHOLDER,
+            "method": method,
+            "params": params,
         }
-        return len(encode_json_message(plan))
+        return len(encode_json_message(request))
 
-    def validate(
+    def validate_rpc_request(
         self,
-        thread_params: dict[str, Any],
-        turn_params: dict[str, Any],
+        method: str,
+        params: dict[str, Any],
         *,
         attachment_count: int,
     ) -> int:
-        payload_bytes = self.measure(thread_params, turn_params)
+        payload_bytes = self.measure(method, params)
         if payload_bytes > self.limit_bytes:
             raise CodexSubscriptionError(
                 "CODEX_REQUEST_TOO_LARGE",
-                "The complete Codex request exceeds the configured limit",
+                f"The Codex {method} request exceeds the configured limit",
                 details={
+                    "method": method,
                     "payload_bytes": payload_bytes,
                     "limit_bytes": self.limit_bytes,
                     "attachment_count": attachment_count,

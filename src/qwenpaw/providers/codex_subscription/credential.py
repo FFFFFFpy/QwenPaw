@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """A marker credential: authentication remains owned by App Server."""
 
 from __future__ import annotations

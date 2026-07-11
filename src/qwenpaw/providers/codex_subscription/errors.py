@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Stable, scrubbed errors for the Codex App Server integration."""
 
 from __future__ import annotations
@@ -30,14 +31,16 @@ class CodexSubscriptionError(ProviderError):
 
 class CodexProtocolError(CodexSubscriptionError):
     def __init__(
-        self, message: str = "Codex App Server protocol error"
+        self,
+        message: str = "Codex App Server protocol error",
     ) -> None:
         super().__init__("CODEX_PROTOCOL_INCOMPATIBLE", message)
 
 
 class CodexConnectionClosedError(CodexSubscriptionError):
     def __init__(
-        self, message: str = "Codex App Server connection closed"
+        self,
+        message: str = "Codex App Server connection closed",
     ) -> None:
         super().__init__(
             "CODEX_RUNTIME_CRASHED",
@@ -72,7 +75,8 @@ def scrub_sensitive_text(value: str) -> str:
     value = _JWT.sub("[REDACTED_TOKEN]", value)
     value = _SECRET.sub("[REDACTED]", value)
     return _EMAIL.sub(
-        lambda match: f"{match.group(1)}***@{match.group(2)}", value
+        lambda match: f"{match.group(1)}***@{match.group(2)}",
+        value,
     )
 
 

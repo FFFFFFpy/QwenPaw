@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=consider-using-with,protected-access,redefined-outer-name
 from __future__ import annotations
 
 import asyncio
@@ -110,8 +112,8 @@ async def test_new_call_waits_for_delayed_interrupt_response(stub_runtime):
 
     call = asyncio.create_task(
         model(
-            [Msg(name="user", role="user", content=[TextBlock(text="next")])]
-        )
+            [Msg(name="user", role="user", content=[TextBlock(text="next")])],
+        ),
     )
     await asyncio.sleep(0)
     assert not call.done()
@@ -202,7 +204,7 @@ async def test_interrupt_failure_blocks_new_turn(stub_runtime):
 
     with pytest.raises(CodexSubscriptionError) as blocked:
         await model(
-            [Msg(name="user", role="user", content=[TextBlock(text="next")])]
+            [Msg(name="user", role="user", content=[TextBlock(text="next")])],
         )
     assert blocked.value is cleanup.value
     assert len(stub_runtime.requests) == request_count
@@ -275,7 +277,7 @@ async def test_cleanup_is_idempotent(stub_runtime):
     await asyncio.shield(first)
     assert bridge.cleanup_state is CleanupState.COMPLETED
     assert [method for method, _ in stub_runtime.requests].count(
-        "turn/interrupt"
+        "turn/interrupt",
     ) == 1
 
 
@@ -283,7 +285,7 @@ async def test_double_cancel_has_one_cleanup_and_no_subscription(stub_runtime):
     model = _model(stub_runtime)
     stub_runtime.responses["turn/start"] = {"turn": {"id": "turn-new"}}
     response = await model(
-        [Msg(name="user", role="user", content=[TextBlock(text="wait")])]
+        [Msg(name="user", role="user", content=[TextBlock(text="wait")])],
     )
     pending = asyncio.create_task(anext(response))
     await asyncio.sleep(0.01)
@@ -293,7 +295,7 @@ async def test_double_cancel_has_one_cleanup_and_no_subscription(stub_runtime):
     await stub_runtime.wait_background_tasks()
 
     assert [method for method, _ in stub_runtime.requests].count(
-        "turn/interrupt"
+        "turn/interrupt",
     ) == 1
     assert model._active_turn is None
     assert stub_runtime.background_task_count == 0
@@ -337,7 +339,7 @@ async def test_tool_timeout_removes_bridge_pending_calls_and_subscriptions(
                 "tool": "lookup",
                 "arguments": {},
             },
-        )
+        ),
     )
     method, _ = await bridge.next_event()
     assert method == "dynamic_tool_call"

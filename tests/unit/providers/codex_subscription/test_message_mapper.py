@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import pytest
@@ -112,8 +113,8 @@ def test_mapper_reports_attachment_limit_without_content():
                 source=Base64Source(
                     data="aGVsbG8=",
                     media_type="image/png",
-                )
-            )
+                ),
+            ),
         ],
     )
     with pytest.raises(CodexSubscriptionError) as caught:

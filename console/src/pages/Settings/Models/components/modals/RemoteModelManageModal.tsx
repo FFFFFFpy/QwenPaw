@@ -1002,6 +1002,17 @@ export function RemoteModelManageModal({
                         )}
                         {t(isDeletable ? "models.userAdded" : "models.builtin")}
                       </Tag>
+                      {m.reasoning_effort_config_invalid && (
+                        <Tooltip
+                          title={t(
+                            "models.codexSubscription.reasoningEffortInvalid",
+                          )}
+                        >
+                          <Tag color="warning">
+                            {t("models.codexSubscription.needsReview")}
+                          </Tag>
+                        </Tooltip>
+                      )}
                       <span
                         style={{
                           display: "inline-block",

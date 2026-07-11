@@ -1350,6 +1350,7 @@
     "llmConfiguration": "LLM 配置",
     "codexSubscription": {
       "cloudSubscription": "云订阅",
+      "experimental": "实验性云订阅",
       "runtime": "运行时",
       "runtimeStates": {
         "not_installed": "未安装",
@@ -1361,7 +1362,11 @@
         "stopping": "停止中"
       },
       "account": "账户",
+      "notChecked": "尚未检查",
       "notConnected": "未连接",
+      "statusMayBeOutdated": "状态可能已过期",
+      "reasoningEffortInvalid": "已保存的推理强度不再受支持，请重新选择。",
+      "needsReview": "需要检查",
       "plan": "订阅计划",
       "modelsLabel": "模型",
       "usage": "额度使用",

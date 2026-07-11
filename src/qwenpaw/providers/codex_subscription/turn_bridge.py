@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
 """Per-generation turn state and cleanup for the Codex adapter."""
+
+# pylint: disable=too-many-branches
 
 from __future__ import annotations
 
@@ -61,8 +64,6 @@ class TurnBridge:
         timeout_seconds: float,
         timeout_callback: Callable[[], None],
     ) -> None:
-        if self.turn_id is None:
-            raise RuntimeError("turn id must be set before enabling tools")
         self.tool_bridge = ToolTurnBridge(
             thread_id=self.thread_id,
             turn_id=self.turn_id,
@@ -71,10 +72,22 @@ class TurnBridge:
             timeout_seconds=timeout_seconds,
             timeout_callback=timeout_callback,
         )
-        get_tool_registry(self.runtime).add(self.tool_bridge)
+        registry = get_tool_registry(self.runtime)
+        registry.bind_generation()
+        registry.add(self.tool_bridge)
+
+    def bind_turn(self, turn_id: str) -> None:
+        self.turn_id = turn_id
+        if self.tool_bridge is not None:
+            self.tool_bridge.bind_turn(turn_id)
+
+    def fail_turn_start(self, error: CodexSubscriptionError) -> None:
+        if self.tool_bridge is not None:
+            self.tool_bridge.fail_turn_start(error)
 
     async def next_event(
-        self, timeout: float = 600.0
+        self,
+        timeout: float = 600.0,
     ) -> tuple[str, dict[str, Any]]:
         if self.backlog:
             return self.backlog.popleft()
@@ -98,14 +111,15 @@ class TurnBridge:
         recovery_error = self.cleanup_error
         self.cleanup_state = CleanupState.RUNNING
         self.cleanup_complete.clear()
-        self.cleanup_task = self.runtime.create_background_task(
+        task = self.runtime.create_background_task(
             self._run_cleanup(
                 interrupt=interrupt,
                 recovery_error=recovery_error,
             ),
             name=f"codex-turn-cleanup-{self.thread_id}",
         )
-        return self.cleanup_task
+        self.cleanup_task = task
+        return task
 
     async def cleanup(
         self,

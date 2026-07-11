@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -35,9 +36,9 @@ async def test_dynamic_tool_round_trip_continues_same_turn(stub_runtime):
             "thread/start": {"thread": {"id": "thread-1"}},
         },
     )
-    server_result: asyncio.Future[dict] = (
-        asyncio.get_running_loop().create_future()
-    )
+    server_result: asyncio.Future[
+        dict
+    ] = asyncio.get_running_loop().create_future()
 
     def turn_start(_params):
         async def request_tool():

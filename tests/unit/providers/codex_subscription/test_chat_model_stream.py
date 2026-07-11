@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -92,6 +93,7 @@ def schedule_completed_turn(stub_runtime, *, include_reasoning: bool = False):
 
 
 async def test_streams_text_and_reasoning_and_cleans_up(stub_runtime):
+    stub_runtime.mcp_server_names = ("user-configured",)
     model = make_model(stub_runtime)
     schedule_completed_turn(stub_runtime, include_reasoning=True)
     response = await model(
@@ -116,16 +118,28 @@ async def test_streams_text_and_reasoning_and_cleans_up(stub_runtime):
         for method, params in stub_runtime.requests
         if method == "thread/start"
     )
-    assert thread_params["sandbox"] == {
-        "type": "readOnly",
-        "networkAccess": False,
-        "access": {
-            "type": "restricted",
-            "readableRoots": [thread_params["cwd"]],
-        },
+    assert thread_params["sandbox"] == "read-only"
+    assert thread_params["config"]["features"]["shell_tool"] is False
+    assert thread_params["config"]["features"]["apps"] is False
+    assert thread_params["config"]["features"]["plugins"] is False
+    assert thread_params["config"]["web_search"] == "disabled"
+    assert thread_params["config"]["orchestrator"] == {
+        "mcp": {"enabled": False},
+    }
+    assert thread_params["config"]["mcp_servers"] == {
+        "user-configured": {"enabled": False},
     }
     assert thread_params["runtimeWorkspaceRoots"] == [thread_params["cwd"]]
     assert thread_params["environments"] == []
+    turn_params = next(
+        params
+        for method, params in stub_runtime.requests
+        if method == "turn/start"
+    )
+    assert turn_params["sandboxPolicy"] == {
+        "type": "readOnly",
+        "networkAccess": False,
+    }
 
 
 async def test_reasoning_can_be_suppressed(stub_runtime):
@@ -298,7 +312,7 @@ async def test_complete_payload_budget_blocks_before_thread_start(
                 source=Base64Source(
                     data="a" * 80,
                     media_type="image/png",
-                )
+                ),
             ),
         ],
     )
@@ -310,7 +324,7 @@ async def test_complete_payload_budget_blocks_before_thread_start(
                 "description": "tool schema" * 20,
                 "parameters": {"type": "object"},
             },
-        }
+        },
     ]
 
     with pytest.raises(CodexSubscriptionError) as caught:
@@ -319,6 +333,7 @@ async def test_complete_payload_budget_blocks_before_thread_start(
     assert caught.value.error_code == "CODEX_REQUEST_TOO_LARGE"
     assert caught.value.details["attachment_count"] == 1
     assert set(caught.value.details) == {
+        "method",
         "payload_bytes",
         "limit_bytes",
         "attachment_count",

@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Scriptable JSONL fake used by runtime integration tests."""
+
+# pylint: disable=too-many-branches,too-many-statements
 
 from __future__ import annotations
 
@@ -180,6 +183,25 @@ async def main() -> None:
                     },
                 },
             )
+        elif method == "mcpServerStatus/list":
+            await send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "data": [
+                            {
+                                "name": "fixture-mcp",
+                                "serverInfo": None,
+                                "tools": {},
+                                "resources": [],
+                                "resourceTemplates": [],
+                                "authStatus": "unsupported",
+                            },
+                        ],
+                        "nextCursor": None,
+                    },
+                },
+            )
         elif method == "account/rateLimits/read":
             await send(
                 {
@@ -209,36 +231,37 @@ async def main() -> None:
             turn_counter += 1
             turn_id = f"turn-{turn_counter}"
             thread_id = str(params.get("threadId"))
-            await send(
-                {"id": request_id, "result": {"turn": {"id": turn_id}}},
-            )
             serialized_input = json.dumps(params.get("input", []))
-            if "WAIT_FOREVER" in serialized_input:
-                continue
             if thread_id in dynamic_threads:
                 pending_tool_turn = (thread_id, turn_id)
-
-                async def request_tool(
-                    tool_thread_id: str = thread_id,
-                    tool_turn_id: str = turn_id,
-                ) -> None:
-                    await asyncio.sleep(0.01)
-                    await send(
-                        {
-                            "id": "tool-fake",
-                            "method": "item/tool/call",
-                            "params": {
-                                "threadId": tool_thread_id,
-                                "turnId": tool_turn_id,
-                                "callId": "call-fake",
-                                "tool": "lookup",
-                                "arguments": {"query": "fixture"},
-                            },
+                await send(
+                    {
+                        "id": "tool-fake",
+                        "method": "item/tool/call",
+                        "params": {
+                            "threadId": thread_id,
+                            "turnId": turn_id,
+                            "callId": "call-fake",
+                            "tool": "lookup",
+                            "arguments": {"query": "fixture"},
                         },
-                    )
-
-                asyncio.create_task(request_tool())
+                    },
+                )
+                await send(
+                    {
+                        "id": request_id,
+                        "result": {"turn": {"id": turn_id}},
+                    },
+                )
             else:
+                await send(
+                    {
+                        "id": request_id,
+                        "result": {"turn": {"id": turn_id}},
+                    },
+                )
+                if "WAIT_FOREVER" in serialized_input:
+                    continue
                 asyncio.create_task(finish_turn(thread_id, turn_id))
         elif method in {"turn/interrupt", "thread/unsubscribe"}:
             await send({"id": request_id, "result": {}})

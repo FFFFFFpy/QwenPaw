@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """OpenAI Codex cloud-subscription provider primitives."""
 
 from .errors import CodexSubscriptionError

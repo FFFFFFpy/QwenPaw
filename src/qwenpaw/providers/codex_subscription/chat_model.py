@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
 """AgentScope ChatModel adapter for Codex App Server turns."""
+
+# pylint: disable=consider-using-with,too-many-branches,too-many-statements
 
 from __future__ import annotations
 
@@ -33,14 +36,20 @@ from .message_mapper import MessageMapper
 from .payload_budget import TurnPayloadBudget
 from .runtime import CodexAppServerRuntime, RuntimeState
 from .schema_capabilities import build_restricted_sandbox_policy
+from .tool_isolation import build_tool_isolation_config
 from .tool_bridge import format_dynamic_tools
 from .turn_bridge import CleanupState, TurnBridge
 
 logger = logging.getLogger(__name__)
 
 _BLOCKED_ITEM_TYPES = {
+    "browserUse",
+    "collabAgentToolCall",
     "commandExecution",
+    "computerUse",
     "fileChange",
+    "imageView",
+    "imageGeneration",
     "mcpToolCall",
     "webSearch",
 }
@@ -76,7 +85,16 @@ class CodexSubscriptionChatModel(ChatModelBase):
         self.runtime = runtime
         self.auth_service = auth_service or AuthService(runtime)
         self.relay_reasoning = relay_reasoning
-        self.message_mapper = message_mapper or MessageMapper()
+        attachment_limit = int(
+            getattr(runtime.settings, "max_attachment_bytes", 8 * 1024 * 1024),
+        )
+        raw_image_limit = min(
+            attachment_limit,
+            int(runtime.settings.max_message_bytes * 0.60),
+        )
+        self.message_mapper = message_mapper or MessageMapper(
+            max_image_bytes=raw_image_limit,
+        )
         self._active_turn: TurnBridge | None = None
         self._starting_turn = False
         self._cleanup_bridge: TurnBridge | None = None
@@ -204,9 +222,20 @@ class CodexSubscriptionChatModel(ChatModelBase):
                     "CODEX_PROTOCOL_INCOMPATIBLE",
                     "Codex capabilities are unavailable",
                 )
+            if not capabilities.tool_isolation_verified:
+                raise CodexSubscriptionError(
+                    "CODEX_TOOL_ISOLATION_UNVERIFIED",
+                    "This Codex version has not passed the QwenPaw built-in "
+                    "tool isolation probe",
+                    remediation=(
+                        "Run the explicit account-backed tool isolation probe "
+                        "before enabling real Codex chats."
+                    ),
+                )
             if dynamic_tools:
                 disabled = os.getenv(
-                    "QWENPAW_CODEX_DYNAMIC_TOOLS", "auto"
+                    "QWENPAW_CODEX_DYNAMIC_TOOLS",
+                    "auto",
                 ).lower()
                 if (
                     disabled in {"0", "false", "no", "off"}
@@ -263,28 +292,33 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 getattr(self.parameters, "reasoning_effort", None),
                 model_row,
             )
+            mcp_server_names = await self.runtime.list_mcp_server_names()
 
             thread_params: dict[str, Any] = {
                 "model": model_name,
                 "cwd": temporary.name,
                 "approvalPolicy": "never",
-                "sandbox": build_restricted_sandbox_policy(
-                    capabilities,
-                    temporary.name,
-                ),
+                "sandbox": "read-only",
                 "ephemeral": True,
                 "serviceName": "qwenpaw",
                 "developerInstructions": (
                     _DEVELOPER_INSTRUCTIONS + tool_instruction
                 ),
+                "config": build_tool_isolation_config(
+                    mcp_server_names=mcp_server_names,
+                ),
             }
             if capabilities.runtime_workspace_roots:
                 thread_params["runtimeWorkspaceRoots"] = [temporary.name]
-            if capabilities.environments_field:
-                thread_params["environments"] = []
+            thread_params["environments"] = []
             if dynamic_tools:
                 thread_params["dynamicTools"] = dynamic_tools
-            turn_template: dict[str, Any] = {"input": turn_input}
+            turn_template: dict[str, Any] = {
+                "input": turn_input,
+                "sandboxPolicy": build_restricted_sandbox_policy(
+                    capabilities,
+                ),
+            }
             if effort is not None:
                 turn_template["effort"] = effort
             attachment_count = sum(
@@ -293,9 +327,9 @@ class CodexSubscriptionChatModel(ChatModelBase):
             payload_budget = TurnPayloadBudget(
                 self.runtime.settings.max_message_bytes,
             )
-            payload_budget.validate(
+            payload_budget.validate_rpc_request(
+                "thread/start",
                 thread_params,
-                turn_template,
                 attachment_count=attachment_count,
             )
             thread_response = await self.runtime.request(
@@ -321,26 +355,6 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 ),
             )
 
-            turn_params: dict[str, Any] = {
-                "threadId": thread_id,
-                **turn_template,
-            }
-            payload_budget.validate(
-                thread_params,
-                turn_params,
-                attachment_count=attachment_count,
-            )
-            turn_response = await self.runtime.request(
-                "turn/start", turn_params
-            )
-            turn = turn_response.get("turn")
-            turn_id = turn.get("id") if isinstance(turn, dict) else None
-            if not isinstance(turn_id, str) or not turn_id:
-                raise CodexSubscriptionError(
-                    "CODEX_PROTOCOL_INCOMPATIBLE",
-                    "Codex did not return a turn identifier",
-                )
-            bridge.turn_id = turn_id
             if dynamic_tools:
                 names = {str(tool["name"]) for tool in dynamic_tools}
                 active_bridge = bridge
@@ -355,6 +369,34 @@ class CodexSubscriptionChatModel(ChatModelBase):
                     self.runtime.settings.tool_wait_timeout_seconds,
                     on_tool_timeout,
                 )
+
+            turn_params: dict[str, Any] = {
+                "threadId": thread_id,
+                **turn_template,
+            }
+            payload_budget.validate_rpc_request(
+                "turn/start",
+                turn_params,
+                attachment_count=attachment_count,
+            )
+            try:
+                turn_response = await self.runtime.request(
+                    "turn/start",
+                    turn_params,
+                )
+            except CodexSubscriptionError as exc:
+                bridge.fail_turn_start(exc)
+                raise
+            turn = turn_response.get("turn")
+            turn_id = turn.get("id") if isinstance(turn, dict) else None
+            if not isinstance(turn_id, str) or not turn_id:
+                error = CodexSubscriptionError(
+                    "CODEX_PROTOCOL_INCOMPATIBLE",
+                    "Codex did not return a turn identifier",
+                )
+                bridge.fail_turn_start(error)
+                raise error
+            bridge.bind_turn(turn_id)
             self._active_turn = bridge
             logger.info(
                 "Codex turn started generation=%s model=%s thread=%s "
@@ -413,18 +455,19 @@ class CodexSubscriptionChatModel(ChatModelBase):
                     ] = [bridge.tool_bridge.make_tool_call_block(params)]
                     await asyncio.sleep(0)
                     while not bridge.queue.empty():
-                        queued_method, queued_params = (
-                            bridge.queue.get_nowait()
-                        )
+                        (
+                            queued_method,
+                            queued_params,
+                        ) = bridge.queue.get_nowait()
                         if queued_method == "dynamic_tool_call":
                             blocks.append(
                                 bridge.tool_bridge.make_tool_call_block(
-                                    queued_params
-                                )
+                                    queued_params,
+                                ),
                             )
                         else:
                             bridge.backlog.append(
-                                (queued_method, queued_params)
+                                (queued_method, queued_params),
                             )
                     yield ChatResponse(
                         content=blocks,
@@ -453,7 +496,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                                 TextBlock(
                                     text=delta,
                                     id=str(
-                                        params.get("itemId") or "codex-text"
+                                        params.get("itemId") or "codex-text",
                                     ),
                                 ),
                             ],
@@ -472,7 +515,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                                     thinking=delta,
                                     id=str(
                                         params.get("itemId")
-                                        or "codex-reasoning"
+                                        or "codex-reasoning",
                                     ),
                                 ),
                             ],

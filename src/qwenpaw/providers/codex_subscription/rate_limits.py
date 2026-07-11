@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Subscription usage-window mapping."""
 
 from __future__ import annotations
