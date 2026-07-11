@@ -40,6 +40,27 @@ class FakeHTTP:
         yield FakeResponse()
 
 
+class FakeToolResponse:
+    async def aiter_lines(self):
+        for line in [
+            'data: {"type":"response.output_item.done","item":'
+            '{"type":"function_call","call_id":"call-image",'
+            '"name":"image_generate","arguments":"{\\"prompt\\":'
+            '\\"draw a cat\\"}"}}',
+            "",
+            'data: {"type":"response.completed","response":'
+            '{"usage":{"input_tokens":2,"output_tokens":3,'
+            '"total_tokens":5}}}',
+            "",
+        ]:
+            yield line
+
+
+class FakeToolHTTP:
+    async def stream(self, **kwargs):
+        yield FakeToolResponse()
+
+
 @pytest.mark.asyncio
 async def test_direct_text_stream_has_no_thread_or_runtime(tmp_path):
     store = TokenStore(tmp_path / "oauth.enc")
@@ -73,8 +94,41 @@ async def test_direct_text_stream_has_no_thread_or_runtime(tmp_path):
     chunks = [chunk async for chunk in response]
     assert chunks[0].content[0].text == "PONG"
     assert chunks[-1].is_last
+    assert chunks[-1].content[0].text == "PONG"
     assert chunks[-1].usage.input_tokens == 2
     assert http.calls == 1
+
+
+@pytest.mark.asyncio
+async def test_terminal_response_retains_accumulated_tool_call(tmp_path):
+    store = TokenStore(tmp_path / "oauth.enc")
+    store.save(
+        TokenRecord(
+            account_local_id="default",
+            access_token="access",
+            refresh_token="refresh",
+            account_id="acct",
+            expires_at=time.time() + 3600,
+            last_refresh_at=time.time(),
+        )
+    )
+    model = ChatGPTSubscriptionChatModel(
+        credential=CodexSubscriptionCredential(id="test", name="test"),
+        model="gpt-5.6-luna",
+        parameters=ChatGPTSubscriptionChatModel.Parameters(),
+        token_store=store,
+        oauth_service=OAuthService(store),
+        http_client=FakeToolHTTP(),
+    )
+    response = await model(
+        [UserMsg(name="user", content=[TextBlock(text="draw a cat")])]
+    )
+    chunks = [chunk async for chunk in response]
+    terminal = chunks[-1]
+    assert terminal.is_last
+    assert terminal.content[0].name == "image_generate"
+    assert terminal.content[0].input == '{"prompt":"draw a cat"}'
+    assert terminal.usage.output_tokens == 3
 
 
 class RefreshingOAuth(OAuthService):
@@ -287,6 +341,11 @@ async def test_cancellation_finishes_as_interrupted(tmp_path):
         async def stream(self, **kwargs):
             class BlockingResponse:
                 async def aiter_lines(self):
+                    yield (
+                        'data: {"type":"response.output_text.delta",'
+                        '"delta":"partial"}'
+                    )
+                    yield ""
                     await asyncio.Event().wait()
                     yield ""  # pragma: no cover
 
@@ -314,4 +373,5 @@ async def test_cancellation_finishes_as_interrupted(tmp_path):
     task.cancel()
     await task
     assert chunks[-1].is_last
+    assert chunks[-1].content[0].text == "partial"
     assert chunks[-1].finished_reason == FinishedReason.INTERRUPTED

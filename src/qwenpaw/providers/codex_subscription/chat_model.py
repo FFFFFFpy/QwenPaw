@@ -122,6 +122,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
             emitted_tool_call = False
             usage: dict[str, int] | None = None
             parser = ResponsesStreamParser()
+            accumulated = ChatResponse(content=[], is_last=True)
             completed = False
             try:
                 async for response in self.http_client.stream(
@@ -144,26 +145,30 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                 completed = True
                             elif part.kind == "text" and part.text:
                                 emitted_any = True
-                                yield ChatResponse(
+                                chunk = ChatResponse(
                                     content=[TextBlock(text=part.text)],
                                     is_last=False,
                                 )
+                                accumulated.append_chat_response(chunk)
+                                yield chunk
                             elif (
                                 part.kind == "reasoning"
                                 and part.text
                                 and self.relay_reasoning
                             ):
                                 emitted_any = True
-                                yield ChatResponse(
+                                chunk = ChatResponse(
                                     content=[
                                         ThinkingBlock(thinking=part.text)
                                     ],
                                     is_last=False,
                                 )
+                                accumulated.append_chat_response(chunk)
+                                yield chunk
                             elif part.kind == "tool":
                                 emitted_any = True
                                 emitted_tool_call = True
-                                yield ChatResponse(
+                                chunk = ChatResponse(
                                     content=[
                                         ToolCallBlock(
                                             id=part.call_id,
@@ -173,6 +178,8 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                     ],
                                     is_last=False,
                                 )
+                                accumulated.append_chat_response(chunk)
+                                yield chunk
                 if not completed:
                     raise CodexTransportError(
                         "CODEX_STREAM_DISCONNECTED",
@@ -187,29 +194,28 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                         time=time.monotonic() - started,
                         metadata={"total_tokens": usage["total_tokens"]},
                     )
+                # ChatModelBase owns stream accumulation and emits the final
+                # cumulative response. Keep the usage-only carrier non-final;
+                # yielding an empty is_last=True chunk would make AgentScope
+                # discard all previously accumulated text and tool calls.
                 yield ChatResponse(
                     content=[],
-                    is_last=True,
+                    is_last=False,
                     usage=chat_usage,
-                    finished_reason=FinishedReason.COMPLETED,
                 )
                 if self.availability_callback:
                     self.availability_callback(str(body["model"]), "available")
                 return
             except asyncio.CancelledError:
-                interrupted = ChatResponse(
-                    content=[],
-                    is_last=True,
-                )
-                # AgentScope's DictMixin currently drops non-default enum
-                # dataclass arguments during construction. Set the terminal
-                # reason explicitly so cancellation is observable upstream.
+                # AgentScope's DictMixin currently drops enum assignment via
+                # normal setattr. Return the content accumulated so far with
+                # an explicit interrupted terminal response.
                 object.__setattr__(
-                    interrupted,
+                    accumulated,
                     "finished_reason",
                     FinishedReason.INTERRUPTED,
                 )
-                yield interrupted
+                yield accumulated
                 return
             except httpx.HTTPError as exc:
                 if emitted_any or emitted_tool_call:

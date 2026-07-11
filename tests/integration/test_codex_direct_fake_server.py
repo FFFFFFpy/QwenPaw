@@ -98,6 +98,9 @@ async def test_direct_transport_with_local_sse_server(tmp_path):
         )
         chunks = [chunk async for chunk in response]
     assert chunks[0].content[0].text == "PONG"
+    assert chunks[-1].is_last
+    assert chunks[-1].content[0].text == "PONG"
+    assert chunks[-1].usage.input_tokens == 1
     assert received["body"]["store"] is False
     assert received["headers"]["authorization"] == "Bearer access"
     assert received["headers"]["chatgpt-account-id"] == "account"
