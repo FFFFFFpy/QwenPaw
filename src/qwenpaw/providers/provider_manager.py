@@ -1391,17 +1391,10 @@ class ProviderManager:  # pylint: disable=too-many-public-methods
         self._add_builtin(PROVIDER_KILO)
         self._add_builtin(PROVIDER_OPENAI)
         self._add_builtin(PROVIDER_OPENAI_RESPONSE)
-        codex_enabled = os.getenv(
-            "QWENPAW_CODEX_SUBSCRIPTION_ENABLED",
-            "false",
-        ).lower()
-        if codex_enabled not in {
-            "0",
-            "false",
-            "no",
-            "off",
-        }:
-            self._add_builtin(PROVIDER_OPENAI_CODEX)
+        # Discoverability is independent from runtime readiness.  Codex keeps
+        # enforcing its runtime, account, model and tool-isolation gates when a
+        # model is used, but the provider must always be available for setup.
+        self._add_builtin(PROVIDER_OPENAI_CODEX)
         self._add_builtin(PROVIDER_AZURE_OPENAI)
         self._add_builtin(PROVIDER_ANTHROPIC)
         self._add_builtin(PROVIDER_GEMINI)

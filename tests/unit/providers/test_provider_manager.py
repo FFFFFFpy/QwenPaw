@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from types import SimpleNamespace
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -20,6 +21,9 @@ from qwenpaw.providers.capping_formatter import (
 from qwenpaw.providers.openai_provider import (
     GitHubModelsProvider,
     OpenAIProvider,
+)
+from qwenpaw.providers.codex_subscription.provider import (
+    CodexSubscriptionProvider,
 )
 from qwenpaw.providers.provider import ModelInfo
 from qwenpaw.providers.provider_manager import ProviderManager
@@ -128,6 +132,42 @@ def test_builtin_zhipu_providers_registered(isolated_secret_dir) -> None:
         model_ids = [m.id for m in provider.models]
         assert len(model_ids) > 0
         assert len(model_ids) == len(set(model_ids))
+
+
+@pytest.mark.parametrize("legacy_value", [None, "false"])
+def test_codex_subscription_is_always_registered(
+    isolated_secret_dir,
+    monkeypatch,
+    legacy_value,
+) -> None:
+    if legacy_value is None:
+        monkeypatch.delenv("QWENPAW_CODEX_SUBSCRIPTION_ENABLED", raising=False)
+    else:
+        monkeypatch.setenv("QWENPAW_CODEX_SUBSCRIPTION_ENABLED", legacy_value)
+
+    manager = ProviderManager()
+
+    provider = manager.get_provider("openai-codex")
+    assert isinstance(provider, CodexSubscriptionProvider)
+
+
+async def test_listing_codex_provider_does_not_start_runtime_or_read_account(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai-codex")
+    assert isinstance(provider, CodexSubscriptionProvider)
+    start = AsyncMock()
+    read_account = AsyncMock()
+    monkeypatch.setattr(provider.runtime, "start", start)
+    monkeypatch.setattr(provider.auth_service, "read_account", read_account)
+
+    infos = await manager.list_provider_info()
+
+    assert "openai-codex" in {info.id for info in infos}
+    start.assert_not_awaited()
+    read_account.assert_not_awaited()
 
 
 async def test_add_custom_provider_and_reload_from_storage(

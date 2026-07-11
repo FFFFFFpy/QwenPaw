@@ -16,6 +16,79 @@ export function countConfiguredProviders(providers: ProviderInfo[]): number {
   return providers.filter(getIsConfigured).length;
 }
 
+/** Determine which settings section owns a provider. */
+export function isProviderReady(provider: ProviderInfo): boolean {
+  const hasModels = provider.models.length + provider.extra_models.length > 0;
+  if (provider.is_local) {
+    return hasModels || getIsConfigured(provider);
+  }
+  return getIsConfigured(provider);
+}
+
+/** Split providers by location and configuration state. */
+export function partitionProviders(providers: ProviderInfo[]): {
+  localConfigured: ProviderInfo[];
+  localAvailable: ProviderInfo[];
+  cloudConfigured: ProviderInfo[];
+  cloudAvailable: ProviderInfo[];
+} {
+  const localConfigured: ProviderInfo[] = [];
+  const localAvailable: ProviderInfo[] = [];
+  const cloudConfigured: ProviderInfo[] = [];
+  const cloudAvailable: ProviderInfo[] = [];
+  const isEmbedded = (provider: ProviderInfo) =>
+    provider.id === "qwenpaw-local" || provider.id === "copaw-local";
+
+  const cloud: ProviderInfo[] = [];
+  for (const provider of providers) {
+    if (provider.is_local || provider.is_custom) {
+      if (isEmbedded(provider) || isProviderReady(provider)) {
+        localConfigured.push(provider);
+      } else {
+        localAvailable.push(provider);
+      }
+    } else {
+      cloud.push(provider);
+    }
+  }
+
+  // API-key variants remain grouped when any sibling is configured. Cloud
+  // subscriptions are deliberately ungrouped by groupProviders(), so their
+  // OAuth state alone controls their section.
+  const configuredGroups = new Set<string>();
+  for (const provider of cloud) {
+    if (
+      provider.meta?.provider_kind !== "cloud_subscription" &&
+      provider.provider_group &&
+      isProviderReady(provider)
+    ) {
+      configuredGroups.add(provider.provider_group);
+    }
+  }
+  for (const provider of cloud) {
+    const isSubscription =
+      provider.meta?.provider_kind === "cloud_subscription";
+    const ready = isProviderReady(provider);
+    if (
+      ready ||
+      (!isSubscription &&
+        !!provider.provider_group &&
+        configuredGroups.has(provider.provider_group))
+    ) {
+      cloudConfigured.push(provider);
+    } else {
+      cloudAvailable.push(provider);
+    }
+  }
+
+  return {
+    localConfigured,
+    localAvailable,
+    cloudConfigured,
+    cloudAvailable,
+  };
+}
+
 export interface ProviderGroup {
   groupKey: string;
   groupName: string;

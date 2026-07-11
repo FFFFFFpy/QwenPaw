@@ -4,6 +4,7 @@ import {
   countConfiguredProviders,
   getIsConfigured,
   groupProviders,
+  partitionProviders,
 } from "./utils";
 
 function provider(overrides: Partial<ProviderInfo>): ProviderInfo {
@@ -207,5 +208,76 @@ describe("groupProviders", () => {
       "openai-codex",
       "openai",
     ]);
+  });
+});
+
+describe("partitionProviders", () => {
+  const subscription = (overrides: Partial<ProviderInfo> = {}) =>
+    provider({
+      id: "openai-codex",
+      name: "OpenAI Codex",
+      require_api_key: false,
+      provider_group: "openai",
+      meta: { provider_kind: "cloud_subscription" },
+      ...overrides,
+    });
+
+  it.each([
+    ["unknown", false],
+    ["disconnected", false],
+  ])("puts a %s subscription in available", (accountState, connected) => {
+    const result = partitionProviders([
+      subscription({
+        oauth_connected: connected,
+        meta: {
+          provider_kind: "cloud_subscription",
+          account_state: accountState,
+        },
+      }),
+    ]);
+    expect(result.cloudAvailable.map((item) => item.id)).toEqual([
+      "openai-codex",
+    ]);
+    expect(result.cloudConfigured).toEqual([]);
+  });
+
+  it("moves a connected subscription into configured", () => {
+    const result = partitionProviders([
+      subscription({
+        oauth_connected: true,
+        meta: {
+          provider_kind: "cloud_subscription",
+          account_state: "connected",
+        },
+      }),
+    ]);
+    expect(result.cloudConfigured.map((item) => item.id)).toEqual([
+      "openai-codex",
+    ]);
+    expect(result.cloudAvailable).toEqual([]);
+  });
+
+  it("keeps a stale connected subscription in configured", () => {
+    const result = partitionProviders([
+      subscription({
+        oauth_connected: true,
+        meta: {
+          provider_kind: "cloud_subscription",
+          account_state: "connected",
+          account_state_stale: true,
+        },
+      }),
+    ]);
+    expect(result.cloudConfigured).toHaveLength(1);
+  });
+
+  it("does not inherit configured state from an API-key sibling", () => {
+    const result = partitionProviders([
+      provider({ id: "openai", provider_group: "openai", api_key: "sk-x" }),
+      subscription(),
+    ]);
+    expect(result.cloudAvailable.map((item) => item.id)).toContain(
+      "openai-codex",
+    );
   });
 });

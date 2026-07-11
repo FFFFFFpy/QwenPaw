@@ -23,8 +23,8 @@ import { useTranslation } from "react-i18next";
 import type { ProviderInfo } from "../../../api/types/provider";
 import {
   countConfiguredProviders,
-  getIsConfigured,
   groupProviders,
+  partitionProviders,
 } from "./utils";
 import { ProviderIcon } from "./components/ProviderIconComponent";
 import styles from "./index.module.less";
@@ -114,52 +114,12 @@ function ModelsPage() {
     cloudConfiguredUngrouped,
     cloudAvailableGroups,
   } = useMemo(() => {
-    const localConf: ProviderInfo[] = [];
-    const localAvail: ProviderInfo[] = [];
-    const cloudConf: ProviderInfo[] = [];
-    const cloudAvail: ProviderInfo[] = [];
-
-    const isReady = (p: ProviderInfo) => {
-      if (p.meta?.provider_kind === "cloud_subscription") return true;
-      const hasModels = p.models.length + p.extra_models.length > 0;
-      if (p.is_local) {
-        return hasModels || getIsConfigured(p);
-      }
-      return getIsConfigured(p);
-    };
-
-    // QwenPaw Local is always "configured" (embedded)
-    const isEmbedded = (p: ProviderInfo) =>
-      p.id === "qwenpaw-local" || p.id === "copaw-local";
-
-    // Separate local vs cloud first
-    const allCloud: ProviderInfo[] = [];
-    for (const p of providers) {
-      if (p.is_local || p.is_custom) {
-        if (isEmbedded(p) || isReady(p)) localConf.push(p);
-        else localAvail.push(p);
-      } else {
-        allCloud.push(p);
-      }
-    }
-
-    // For cloud: if ANY variant in a group is configured,
-    // pull the entire group into configured
-    const groupConfigured = new Set<string>();
-    for (const p of allCloud) {
-      if (p.provider_group && isReady(p)) {
-        groupConfigured.add(p.provider_group);
-      }
-    }
-    for (const p of allCloud) {
-      if (p.provider_group && groupConfigured.has(p.provider_group)) {
-        cloudConf.push(p);
-      } else if (!p.provider_group && isReady(p)) {
-        cloudConf.push(p);
-      } else {
-        cloudAvail.push(p);
-      }
-    }
+    const {
+      localConfigured: localConf,
+      localAvailable: localAvail,
+      cloudConfigured: cloudConf,
+      cloudAvailable: cloudAvail,
+    } = partitionProviders(providers);
 
     const sortPriority = (provider: ProviderInfo): number => {
       const hasModels =
