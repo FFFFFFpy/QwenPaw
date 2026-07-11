@@ -31,6 +31,7 @@ from .auth_service import AuthService
 from .errors import CodexSubscriptionError
 from .message_mapper import MessageMapper
 from .runtime import CodexAppServerRuntime, RuntimeState
+from .schema_capabilities import build_restricted_sandbox_policy
 from .tool_bridge import format_dynamic_tools
 from .turn_bridge import TurnBridge
 
@@ -191,11 +192,16 @@ class CodexSubscriptionChatModel(ChatModelBase):
         try:
             if self.runtime.state is not RuntimeState.READY:
                 await self.runtime.start()
+            capabilities = self.runtime.capabilities
+            if capabilities is None:
+                raise CodexSubscriptionError(
+                    "CODEX_PROTOCOL_INCOMPATIBLE",
+                    "Codex capabilities are unavailable",
+                )
             if dynamic_tools:
                 disabled = os.getenv(
                     "QWENPAW_CODEX_DYNAMIC_TOOLS", "auto"
                 ).lower()
-                capabilities = self.runtime.capabilities
                 if (
                     disabled in {"0", "false", "no", "off"}
                     or capabilities is None
@@ -250,13 +256,20 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 "model": model_name,
                 "cwd": temporary.name,
                 "approvalPolicy": "never",
-                "sandbox": "read-only",
+                "sandbox": build_restricted_sandbox_policy(
+                    capabilities,
+                    temporary.name,
+                ),
                 "ephemeral": True,
                 "serviceName": "qwenpaw",
                 "developerInstructions": (
                     _DEVELOPER_INSTRUCTIONS + tool_instruction
                 ),
             }
+            if capabilities.runtime_workspace_roots:
+                thread_params["runtimeWorkspaceRoots"] = [temporary.name]
+            if capabilities.environments_field:
+                thread_params["environments"] = []
             if dynamic_tools:
                 thread_params["dynamicTools"] = dynamic_tools
             thread_response = await self.runtime.request(

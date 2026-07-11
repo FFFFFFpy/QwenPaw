@@ -69,6 +69,29 @@ async def test_server_request_and_unknown_method(runtime):
     assert calls == [{"tool": "allowed"}]
 
 
+@pytest.mark.parametrize(
+    "method",
+    [
+        "item/commandExecution/requestApproval",
+        "item/fileChange/requestApproval",
+        "item/permissions/requestApproval",
+        "mcpServer/elicitation/request",
+        "execCommandApproval",
+        "applyPatchApproval",
+    ],
+)
+async def test_builtin_side_effect_server_requests_are_rejected(
+    runtime,
+    method: str,
+):
+    result = await runtime.request(
+        "test/blockedServerRequest",
+        {"method": method},
+        timeout=0.1,
+    )
+    assert result == {"errorCode": -32001}
+
+
 async def test_remote_error(runtime):
     with pytest.raises(CodexRpcError) as caught:
         await runtime.request("test/error", {})

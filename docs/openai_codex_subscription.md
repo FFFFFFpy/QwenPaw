@@ -66,14 +66,17 @@ to the same Codex turn. If dynamic tools are unavailable or disabled, a chat
 that supplies tools fails clearly; tools are never silently discarded.
 
 Codex built-in command, file-change, web, MCP, and other side-effect paths are
-not authorized. Turns use an isolated temporary working directory, read-only
-sandboxing, no approval escalation, and event-level blocking.
+not authorized. Compatible App Server versions must support a structured
+read-only policy that restricts readable roots to QwenPaw's isolated temporary
+directory and disables network access. QwenPaw refuses to start a real turn if
+that boundary is unavailable. Approval-request rejection and event-level
+blocking remain secondary safeguards.
 
 ## Troubleshooting
 
 - **Not installed:** verify `codex --version`, or set the absolute binary path.
 - **Incompatible:** update the official Codex CLI; QwenPaw detected a missing
-  required App Server protocol method.
+  required protocol method or restricted readable-root sandbox capability.
 - **Login expired:** start a new browser or device-code login session.
 - **No models:** confirm the card says connected, then refresh. Availability is
   determined by the current ChatGPT account and workspace.

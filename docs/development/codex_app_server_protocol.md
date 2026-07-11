@@ -53,13 +53,15 @@ does not opt into attestation or MCP elicitation.
 | Turn interruption | supported | `turn/interrupt` requires `threadId` and `turnId` |
 | Event unsubscription | supported | `thread/unsubscribe` |
 | Dynamic tools | experimental | `thread/start.dynamicTools`; server request `item/tool/call` |
-| Disable built-in side effects | supported by containment | `approvalPolicy=never`, `sandbox=read-only`, isolated cwd; all command/file/permission requests are rejected |
+| Restricted file reads and disabled network | required | structured `thread/start.sandbox` must bind readable roots to the isolated cwd and set `networkAccess=false`; string sandbox modes are rejected as incompatible |
+| Built-in side-effect requests | explicitly rejected | command/file/patch/permission/MCP approval methods have registered denial handlers |
 | Thread archive | supported | `thread/archive`; QwenPaw normally uses unsubscribe for ephemeral cycles |
 
-The runtime detects capabilities from the generated/observed method surface,
-not from a version-number comparison. Missing optional methods degrade
-explicitly. Missing initialize, account, model, thread, or turn primitives make
-the runtime incompatible.
+The runtime parses the generated JSON Schema method envelopes and follows
+field paths and enum variants; it does not infer security capabilities from
+text occurrence or a version number. Missing restricted readable roots,
+network disable, or required protocol primitives makes the runtime
+incompatible before a child process or real turn is started.
 
 ## Focused message contract
 
@@ -69,8 +71,9 @@ the runtime incompatible.
   never sends API keys or externally managed ChatGPT tokens.
 - `model/list` is paginated. Hidden entries are excluded. Model IDs are never
   supplied from a static fallback table.
-- A generation creates an ephemeral thread with an isolated cwd,
-  `approvalPolicy=never`, and `sandbox=read-only`, then calls `turn/start`.
+- A generation creates an ephemeral thread with an isolated cwd and a
+  structured read-only sandbox whose only readable root is that cwd and whose
+  network access is disabled, then calls `turn/start`.
 - Text and reasoning notifications must match the active thread and turn.
 - `turn/completed.turn.status` is one of `completed`, `interrupted`, `failed`,
   or `inProgress`; a failed turn carries a structured error.
@@ -79,13 +82,17 @@ the runtime incompatible.
 - Unknown notifications are ignored after a debug log. Unknown server requests
   receive JSON-RPC method-not-found immediately.
 - `item/commandExecution/requestApproval`,
-  `item/fileChange/requestApproval`, permission requests, legacy command
-  approvals, and patch approvals are always rejected.
+  `item/fileChange/requestApproval`, permission/MCP requests, legacy command
+  approvals, and patch approvals have explicit rejection handlers.
 
 ## Security boundary
+
+The structured sandbox is the primary file and network boundary. Detection of
+unexpected `item/started` command, file, web, or MCP events remains a secondary
+fuse that interrupts a protocol-violating turn; it is not treated as the
+permission system. Developer instructions are defense in depth only.
 
 The probe and provider never read or parse `~/.codex/auth.json`. Authentication
 storage and token refresh remain exclusively owned by the official App Server.
 No access token, refresh token, session cookie, authorization URL query string,
 full user prompt, or tool argument is logged or persisted by QwenPaw.
-

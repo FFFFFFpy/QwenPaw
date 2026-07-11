@@ -77,6 +77,7 @@ export const SubscriptionProviderCard = React.memo(
               error_code: "CODEX_RUNTIME_START_FAILED",
               message:
                 reason instanceof Error ? reason.message : String(reason),
+              remediation: null,
             },
         );
       } finally {
@@ -232,6 +233,9 @@ export const SubscriptionProviderCard = React.memo(
           </div>
           {runtime?.message && (
             <div className={styles.groupCardMono}>{runtime.message}</div>
+          )}
+          {runtime?.remediation && (
+            <div className={styles.groupCardMono}>{runtime.remediation}</div>
           )}
           {runtime?.state === "not_installed" && (
             <div className={styles.groupCardMono}>

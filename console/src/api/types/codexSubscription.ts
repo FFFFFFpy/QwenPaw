@@ -18,6 +18,7 @@ export interface CodexRuntimeStatus {
   capabilities: Record<string, boolean | string | null> | null;
   error_code: string | null;
   message: string | null;
+  remediation: string | null;
 }
 
 export interface CodexAccountStatus {

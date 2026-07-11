@@ -116,6 +116,13 @@ class CodexAppServerRuntime:
                         self._provided_capabilities
                         or CodexCapabilities.focused_contract()
                     )
+                capabilities = self.capabilities
+                if capabilities is None:
+                    raise CodexSubscriptionError(
+                        "CODEX_PROTOCOL_INCOMPATIBLE",
+                        "Codex capabilities were not detected",
+                    )
+                capabilities.validate_required_surface()
                 self.generation_id = secrets.token_hex(4)
                 subprocess_kwargs: dict[str, Any] = {}
                 if sys.platform == "win32":
@@ -138,6 +145,7 @@ class CodexAppServerRuntime:
                     max_message_bytes=self.settings.max_message_bytes,
                     default_timeout=self.settings.request_timeout_seconds,
                 )
+                self._register_blocked_server_requests()
                 self._rpc.start()
                 if self._process.stderr is not None:
                     self._stderr_task = asyncio.create_task(
@@ -154,7 +162,7 @@ class CodexAppServerRuntime:
                         },
                         "capabilities": {
                             "experimentalApi": bool(
-                                self.capabilities.dynamic_tools,
+                                capabilities.dynamic_tools,
                             ),
                             "requestAttestation": False,
                         },
@@ -167,7 +175,7 @@ class CodexAppServerRuntime:
                     "platform=%s/%s",
                     self.generation_id,
                     self.binary_version or "unknown",
-                    self.capabilities.schema_fingerprint[:12],
+                    capabilities.schema_fingerprint[:12],
                     self.initialize_result.get("platformFamily", "unknown"),
                     self.initialize_result.get("platformOs", "unknown"),
                 )
@@ -179,7 +187,10 @@ class CodexAppServerRuntime:
                 await self._cleanup_process()
                 if exc.error_code == "CODEX_NOT_INSTALLED":
                     self._state = RuntimeState.NOT_INSTALLED
-                elif exc.error_code == "CODEX_PROTOCOL_INCOMPATIBLE":
+                elif exc.error_code in {
+                    "CODEX_PROTOCOL_INCOMPATIBLE",
+                    "CODEX_SANDBOX_UNSUPPORTED",
+                }:
                     self._state = RuntimeState.INCOMPATIBLE
                 else:
                     self._state = RuntimeState.CRASHED
@@ -248,6 +259,30 @@ class CodexAppServerRuntime:
         handler: ServerRequestHandler,
     ) -> None:
         self.rpc.register_server_request(method, handler)
+
+    def _register_blocked_server_requests(self) -> None:
+        if self._rpc is None:
+            return
+
+        async def reject_side_effect(
+            params: dict[str, Any],
+        ) -> dict[str, Any]:
+            del params
+            raise CodexSubscriptionError(
+                "CODEX_BUILTIN_SIDE_EFFECT_BLOCKED",
+                "QwenPaw rejected a Codex built-in side-effect request",
+            )
+
+        for method in (
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+            "item/permissions/requestApproval",
+            "item/tool/requestUserInput",
+            "mcpServer/elicitation/request",
+            "execCommandApproval",
+            "applyPatchApproval",
+        ):
+            self._rpc.register_server_request(method, reject_side_effect)
 
     async def redetect(self) -> None:
         await self.stop()

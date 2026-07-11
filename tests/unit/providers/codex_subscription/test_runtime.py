@@ -11,6 +11,9 @@ from qwenpaw.providers.codex_subscription.runtime import (
     CodexAppServerRuntime,
     RuntimeState,
 )
+from qwenpaw.providers.codex_subscription.schema_capabilities import (
+    CodexCapabilities,
+)
 from qwenpaw.providers.codex_subscription.settings import (
     CodexSubscriptionSettings,
     discover_codex_binary,
@@ -40,6 +43,20 @@ async def test_runtime_initializes_and_stops():
     assert runtime.initialize_result["platformOs"] == "linux"
     await runtime.stop()
     assert runtime.state is RuntimeState.STOPPED
+
+
+async def test_runtime_rejects_missing_restricted_sandbox_before_spawn():
+    capabilities = CodexCapabilities.focused_contract(
+        restricted_read_sandbox=False,
+    )
+    runtime = CodexAppServerRuntime(
+        command=(sys.executable, "must-not-spawn"),
+        capabilities=capabilities,
+    )
+    with pytest.raises(CodexSubscriptionError) as caught:
+        await runtime.start()
+    assert caught.value.error_code == "CODEX_SANDBOX_UNSUPPORTED"
+    assert runtime.state is RuntimeState.INCOMPATIBLE
 
 
 async def test_runtime_rejects_requests_before_initialize():

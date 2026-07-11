@@ -111,6 +111,21 @@ async def test_streams_text_and_reasoning_and_cleans_up(stub_runtime):
     assert ("thread/unsubscribe", {"threadId": "thread-1"}) in (
         stub_runtime.requests
     )
+    thread_params = next(
+        params
+        for method, params in stub_runtime.requests
+        if method == "thread/start"
+    )
+    assert thread_params["sandbox"] == {
+        "type": "readOnly",
+        "networkAccess": False,
+        "access": {
+            "type": "restricted",
+            "readableRoots": [thread_params["cwd"]],
+        },
+    }
+    assert thread_params["runtimeWorkspaceRoots"] == [thread_params["cwd"]]
+    assert thread_params["environments"] == []
 
 
 async def test_reasoning_can_be_suppressed(stub_runtime):

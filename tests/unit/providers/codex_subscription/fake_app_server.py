@@ -22,6 +22,7 @@ async def main() -> None:
     turn_counter = 0
     dynamic_threads: set[str] = set()
     pending_tool_turn: tuple[str, str] | None = None
+    pending_blocked_request: int | str | None = None
 
     async def finish_turn(
         thread_id: str,
@@ -67,6 +68,20 @@ async def main() -> None:
                     "tool complete",
                 )
                 pending_tool_turn = None
+            continue
+        if method is None and request_id == "blocked-fake":
+            if pending_blocked_request is not None:
+                error = message.get("error")
+                error_code = (
+                    error.get("code") if isinstance(error, dict) else None
+                )
+                await send(
+                    {
+                        "id": pending_blocked_request,
+                        "result": {"errorCode": error_code},
+                    },
+                )
+                pending_blocked_request = None
             continue
         if method == "initialize":
             await send(
@@ -259,6 +274,15 @@ async def main() -> None:
                 },
             )
             await send({"id": request_id, "result": {}})
+        elif method == "test/blockedServerRequest":
+            pending_blocked_request = request_id
+            await send(
+                {
+                    "id": "blocked-fake",
+                    "method": params["method"],
+                    "params": {},
+                },
+            )
         elif method == "test/error":
             await send(
                 {

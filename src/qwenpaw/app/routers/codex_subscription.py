@@ -41,6 +41,7 @@ class RuntimeStatusResponse(BaseModel):
     capabilities: dict[str, Any] | None = None
     error_code: str | None = None
     message: str | None = None
+    remediation: str | None = None
 
 
 class LoginStartRequest(BaseModel):
@@ -133,6 +134,7 @@ async def runtime_status(
         capabilities=capabilities.model_dump() if capabilities else None,
         error_code=error.error_code if error else None,
         message=str(error) if error else None,
+        remediation=error.remediation if error else None,
     )
 
 
