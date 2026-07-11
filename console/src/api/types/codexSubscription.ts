@@ -15,7 +15,7 @@ export interface CodexRuntimeStatus {
   binary_path: string | null;
   binary_version: string | null;
   generation_id: string | null;
-  capabilities: Record<string, boolean | string | null> | null;
+  capabilities: Record<string, boolean | string | string[] | null> | null;
   error_code: string | null;
   message: string | null;
   remediation: string | null;

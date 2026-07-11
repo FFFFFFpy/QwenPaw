@@ -55,7 +55,7 @@ async def test_tool_request_result_round_trip():
                 "threadId": "thread-1",
                 "turnId": "turn-1",
                 "callId": "call-1",
-                "namespace": None,
+                "namespace": "fixture.weather",
                 "tool": "lookup",
                 "arguments": {"q": "value"},
             },

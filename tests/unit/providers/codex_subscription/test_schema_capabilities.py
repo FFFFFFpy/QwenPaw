@@ -109,7 +109,12 @@ def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
     }
     client_notification = {
         "oneOf": [
-            _notification_variant("initialized", "EmptyParams"),
+            {
+                "type": "object",
+                "properties": {
+                    "method": {"type": "string", "enum": ["initialized"]},
+                },
+            },
         ],
         "definitions": {"EmptyParams": {"type": "object"}},
     }
@@ -147,12 +152,42 @@ def protocol_documents(*, restricted_sandbox: bool = True) -> dict[str, dict]:
             },
         },
     }
-    server_notification = {"oneOf": [], "definitions": {}}
+    server_notification = {
+        "oneOf": [
+            _notification_variant(
+                "item/agentMessage/delta",
+                "AgentMessageDeltaNotification",
+            ),
+            _notification_variant(
+                "turn/completed",
+                "TurnCompletedNotification",
+            ),
+        ],
+        "definitions": {
+            "AgentMessageDeltaNotification": {"type": "object"},
+            "TurnCompletedNotification": {"type": "object"},
+        },
+    }
+    client_responses = {
+        method: {"type": "object"} for method in request_methods
+    }
+    server_responses = {
+        "item/tool/call": {
+            "type": "object",
+            "required": ["contentItems", "success"],
+            "properties": {
+                "contentItems": {"type": "array"},
+                "success": {"type": "boolean"},
+            },
+        }
+    }
     return {
         "client_request": client_request,
         "client_notification": client_notification,
         "server_request": server_request,
         "server_notification": server_notification,
+        "client_responses": client_responses,
+        "server_responses": server_responses,
     }
 
 
@@ -162,11 +197,26 @@ def test_structured_schema_detects_restricted_sandbox_and_requests():
     assert capabilities.restricted_read_sandbox is True
     assert capabilities.network_disabled_sandbox is True
     assert capabilities.dynamic_tools is True
+    assert capabilities.dynamic_tool_namespace is True
+    assert capabilities.required_protocol_methods is True
+    assert capabilities.missing_required_methods == ()
     assert capabilities.command_approval_requests is True
     assert capabilities.file_approval_requests is True
     assert capabilities.permission_approval_requests is True
     assert capabilities.mcp_approval_requests is True
     capabilities.validate_required_surface()
+
+    assert catalog.request_schema("thread/start") is not None
+    assert catalog.response_schema("thread/start") is not None
+    assert catalog.notification_schema("initialized") is not None
+    assert catalog.notification_schema("turn/completed") is not None
+    assert catalog.server_request_schema("item/tool/call") is not None
+    assert catalog.supports_field("thread/start", "sandbox")
+    assert catalog.supports_enum(
+        "account/login/start",
+        "type",
+        "chatgpt",
+    )
 
     assert build_restricted_sandbox_policy(capabilities, "/tmp/isolated") == {
         "type": "readOnly",
@@ -202,12 +252,29 @@ def test_security_words_outside_the_field_shape_do_not_count():
     assert capabilities.network_disabled_sandbox is False
 
 
-def test_missing_required_method_is_incompatible():
+@pytest.mark.parametrize(
+    ("surface", "method"),
+    [
+        ("client_request", "initialize"),
+        ("client_request", "account/read"),
+        ("client_request", "account/login/start"),
+        ("client_request", "account/logout"),
+        ("client_request", "model/list"),
+        ("client_request", "thread/start"),
+        ("client_request", "turn/start"),
+        ("client_request", "turn/interrupt"),
+        ("client_request", "thread/unsubscribe"),
+        ("client_notification", "initialized"),
+        ("server_notification", "item/agentMessage/delta"),
+        ("server_notification", "turn/completed"),
+    ],
+)
+def test_missing_required_method_is_incompatible(surface, method):
     documents = protocol_documents()
-    documents["client_request"]["oneOf"] = [
+    documents[surface]["oneOf"] = [
         variant
-        for variant in documents["client_request"]["oneOf"]
-        if variant["properties"]["method"]["enum"] != ["turn/interrupt"]
+        for variant in documents[surface]["oneOf"]
+        if variant["properties"]["method"]["enum"] != [method]
     ]
     capabilities = CodexCapabilities.from_catalog(
         AppServerSchemaCatalog.from_documents(**documents),
@@ -215,3 +282,33 @@ def test_missing_required_method_is_incompatible():
     with pytest.raises(CodexSubscriptionError) as caught:
         capabilities.validate_required_surface()
     assert caught.value.error_code == "CODEX_PROTOCOL_INCOMPATIBLE"
+    assert method in caught.value.details["missing_methods"]
+
+
+@pytest.mark.parametrize("missing_field", ["contentItems", "success"])
+def test_dynamic_tools_require_response_contract(missing_field):
+    documents = protocol_documents()
+    response = documents["server_responses"]["item/tool/call"]
+    response["properties"].pop(missing_field)
+    capabilities = CodexCapabilities.from_catalog(
+        AppServerSchemaCatalog.from_documents(**documents),
+    )
+    assert capabilities.dynamic_tools is False
+
+
+def test_login_method_without_chatgpt_variant_is_incompatible():
+    documents = protocol_documents()
+    definitions = documents["client_request"]["definitions"]
+    definitions["LoginParams"]["properties"]["type"]["enum"] = [
+        "chatgptDeviceCode"
+    ]
+    capabilities = CodexCapabilities.from_catalog(
+        AppServerSchemaCatalog.from_documents(**documents),
+    )
+    with pytest.raises(CodexSubscriptionError) as caught:
+        capabilities.validate_required_surface()
+    assert caught.value.error_code == "CODEX_PROTOCOL_INCOMPATIBLE"
+    assert (
+        "account/login/start[type=chatgpt]"
+        in caught.value.details["missing_methods"]
+    )

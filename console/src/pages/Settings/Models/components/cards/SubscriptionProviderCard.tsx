@@ -40,50 +40,53 @@ export const SubscriptionProviderCard = React.memo(
       null,
     );
 
-    const load = useCallback(async (readAccount = false) => {
-      setLoading(true);
-      try {
-        const runtimeResult = await codexSubscriptionApi.getRuntime();
-        setRuntime(runtimeResult);
-        if (runtimeResult.state === "ready" && readAccount) {
-          try {
-            const accountResult = await codexSubscriptionApi.getAccount();
-            setAccount(accountResult);
-            if (accountResult.connected) {
-              try {
-                setLimits(await codexSubscriptionApi.getRateLimits());
-              } catch {
+    const load = useCallback(
+      async (readAccount = false) => {
+        setLoading(true);
+        try {
+          const runtimeResult = await codexSubscriptionApi.getRuntime();
+          setRuntime(runtimeResult);
+          if (runtimeResult.state === "ready" && readAccount) {
+            try {
+              const accountResult = await codexSubscriptionApi.getAccount();
+              setAccount(accountResult);
+              if (accountResult.connected) {
+                try {
+                  setLimits(await codexSubscriptionApi.getRateLimits());
+                } catch {
+                  setLimits(null);
+                }
+              } else {
                 setLimits(null);
               }
-            } else {
-              setLimits(null);
-            }
-          } catch (reason) {
-            message.error(
-              reason instanceof Error ? reason.message : String(reason),
-            );
-          }
-        }
-      } catch (reason) {
-        setRuntime(
-          (current) =>
-            current || {
-              state: "crashed",
-              installed: true,
-              binary_path: null,
-              binary_version: null,
-              generation_id: null,
-              capabilities: null,
-              error_code: "CODEX_RUNTIME_START_FAILED",
-              message:
+            } catch (reason) {
+              message.error(
                 reason instanceof Error ? reason.message : String(reason),
-              remediation: null,
-            },
-        );
-      } finally {
-        setLoading(false);
-      }
-    }, [message]);
+              );
+            }
+          }
+        } catch (reason) {
+          setRuntime(
+            (current) =>
+              current || {
+                state: "crashed",
+                installed: true,
+                binary_path: null,
+                binary_version: null,
+                generation_id: null,
+                capabilities: null,
+                error_code: "CODEX_RUNTIME_START_FAILED",
+                message:
+                  reason instanceof Error ? reason.message : String(reason),
+                remediation: null,
+              },
+          );
+        } finally {
+          setLoading(false);
+        }
+      },
+      [message],
+    );
 
     useEffect(() => {
       void load(false);

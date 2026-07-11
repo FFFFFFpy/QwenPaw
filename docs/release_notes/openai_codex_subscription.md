@@ -6,6 +6,11 @@ Codex App Server, discover account models, view usage windows, select reasoning
 effort, send image inputs, stream responses, cancel turns, and use QwenPaw tools
 through the dynamic-tool bridge.
 
+The hardened adapter structurally validates the complete required schema,
+enforces restricted reads with network disabled, serializes cancellation with
+a cleanup barrier, budgets full JSON payloads, validates reasoning effort, and
+keeps provider listing free of Runtime and authentication I/O.
+
 Authentication remains entirely within the official App Server. QwenPaw does
 not store ChatGPT OAuth tokens or read Codex authentication files. The feature
 can be rolled back independently with
@@ -14,4 +19,3 @@ can be rolled back independently with
 Known limitation: dynamic tools depend on the installed App Server's
 experimental protocol capability. Browser and device-code login availability
 can also be restricted by ChatGPT workspace policy.
-

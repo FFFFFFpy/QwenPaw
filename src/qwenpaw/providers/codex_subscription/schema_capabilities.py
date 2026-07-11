@@ -14,6 +14,35 @@ from .errors import CodexSubscriptionError
 
 Schema = dict[str, Any]
 
+_CLIENT_RESPONSE_FILES = {
+    "initialize": "v1/InitializeResponse.json",
+    "account/read": "v2/GetAccountResponse.json",
+    "account/login/start": "v2/LoginAccountResponse.json",
+    "account/logout": "v2/LogoutAccountResponse.json",
+    "model/list": "v2/ModelListResponse.json",
+    "thread/start": "v2/ThreadStartResponse.json",
+    "thread/unsubscribe": "v2/ThreadUnsubscribeResponse.json",
+    "turn/start": "v2/TurnStartResponse.json",
+    "turn/interrupt": "v2/TurnInterruptResponse.json",
+}
+_SERVER_RESPONSE_FILES = {
+    "item/tool/call": "DynamicToolCallResponse.json",
+}
+_REQUIRED_METHODS = (
+    ("request", "initialize"),
+    ("client_notification", "initialized"),
+    ("request", "account/read"),
+    ("request", "account/login/start"),
+    ("request", "account/logout"),
+    ("request", "model/list"),
+    ("request", "thread/start"),
+    ("request", "turn/start"),
+    ("request", "turn/interrupt"),
+    ("request", "thread/unsubscribe"),
+    ("notification", "item/agentMessage/delta"),
+    ("notification", "turn/completed"),
+)
+
 
 @dataclass(frozen=True)
 class _SchemaEntry:
@@ -31,12 +60,16 @@ class AppServerSchemaCatalog:
         client_notifications: dict[str, _SchemaEntry],
         server_requests: dict[str, _SchemaEntry],
         server_notifications: dict[str, _SchemaEntry],
+        client_responses: dict[str, _SchemaEntry],
+        server_responses: dict[str, _SchemaEntry],
         fingerprint: str,
     ) -> None:
         self._client_requests = client_requests
         self._client_notifications = client_notifications
         self._server_requests = server_requests
         self._server_notifications = server_notifications
+        self._client_responses = client_responses
+        self._server_responses = server_responses
         self.fingerprint = fingerprint
 
     @classmethod
@@ -47,12 +80,16 @@ class AppServerSchemaCatalog:
         client_notification: Schema,
         server_request: Schema,
         server_notification: Schema,
+        client_responses: dict[str, Schema] | None = None,
+        server_responses: dict[str, Schema] | None = None,
     ) -> "AppServerSchemaCatalog":
         documents = {
             "client_request": client_request,
             "client_notification": client_notification,
             "server_request": server_request,
             "server_notification": server_notification,
+            "client_responses": client_responses or {},
+            "server_responses": server_responses or {},
         }
         canonical = json.dumps(
             documents,
@@ -65,6 +102,8 @@ class AppServerSchemaCatalog:
             client_notifications=_index_envelope(client_notification),
             server_requests=_index_envelope(server_request),
             server_notifications=_index_envelope(server_notification),
+            client_responses=_index_responses(client_responses or {}),
+            server_responses=_index_responses(server_responses or {}),
             fingerprint=hashlib.sha256(canonical).hexdigest(),
         )
 
@@ -97,7 +136,19 @@ class AppServerSchemaCatalog:
                     f"Codex App Server generated invalid {name}",
                 )
             documents[key] = value
-        return cls.from_documents(**documents)
+        client_responses = _read_response_documents(
+            directory,
+            _CLIENT_RESPONSE_FILES,
+        )
+        server_responses = _read_response_documents(
+            directory,
+            _SERVER_RESPONSE_FILES,
+        )
+        return cls.from_documents(
+            **documents,
+            client_responses=client_responses,
+            server_responses=server_responses,
+        )
 
     def has_method(self, name: str) -> bool:
         return any(
@@ -114,8 +165,16 @@ class AppServerSchemaCatalog:
         entry = self._client_requests.get(name)
         return _resolved_copy(entry) if entry else None
 
+    def response_schema(self, name: str) -> Schema | None:
+        entry = self._client_responses.get(name)
+        if entry is None:
+            entry = self._server_responses.get(name)
+        return _resolved_copy(entry) if entry else None
+
     def notification_schema(self, name: str) -> Schema | None:
         entry = self._server_notifications.get(name)
+        if entry is None:
+            entry = self._client_notifications.get(name)
         return _resolved_copy(entry) if entry else None
 
     def server_request_schema(self, name: str) -> Schema | None:
@@ -137,17 +196,17 @@ class AppServerSchemaCatalog:
     def supports_field(
         self,
         method: str,
-        path: Iterable[str],
+        path: str | Iterable[str],
         *,
         surface: str = "request",
     ) -> bool:
         entry = self._entry(method, surface)
-        return bool(entry and _nodes_at(entry, tuple(path)))
+        return bool(entry and _nodes_at(entry, _normalize_path(path)))
 
     def supports_enum(
         self,
         method: str,
-        path: Iterable[str],
+        path: str | Iterable[str],
         value: Any,
         *,
         surface: str = "request",
@@ -157,7 +216,7 @@ class AppServerSchemaCatalog:
             return False
         return any(
             value in _enum_values(node, entry.definitions)
-            for node in _nodes_at(entry, tuple(path))
+            for node in _nodes_at(entry, _normalize_path(path))
         )
 
     def supports_restricted_read_sandbox(self) -> tuple[bool, bool]:
@@ -210,6 +269,12 @@ class AppServerSchemaCatalog:
             return self._server_requests.get(method)
         if surface == "notification":
             return self._server_notifications.get(method)
+        if surface == "response":
+            return self._client_responses.get(
+                method,
+            ) or self._server_responses.get(method)
+        if surface == "server_response":
+            return self._server_responses.get(method)
         raise ValueError(f"Unknown schema surface: {surface}")
 
 
@@ -221,6 +286,7 @@ class CodexCapabilities:
     rate_limits: bool
     image_input: bool
     dynamic_tools: bool
+    dynamic_tool_namespace: bool
     turn_interrupt: bool
     thread_archive_or_unsubscribe: bool
     restricted_read_sandbox: bool
@@ -232,9 +298,11 @@ class CodexCapabilities:
     permission_approval_requests: bool
     mcp_approval_requests: bool
     builtin_tools_disable_mode: str | None
+    required_protocol_methods: bool
+    missing_required_methods: tuple[str, ...]
     schema_fingerprint: str = ""
 
-    def model_dump(self) -> dict[str, bool | str | None]:
+    def model_dump(self) -> dict[str, Any]:
         return asdict(self)
 
     @classmethod
@@ -245,13 +313,29 @@ class CodexCapabilities:
         restricted, network_disabled = (
             catalog.supports_restricted_read_sandbox()
         )
+        browser_login = catalog.has_client_request(
+            "account/login/start"
+        ) and catalog.supports_enum(
+            "account/login/start", ("type",), "chatgpt"
+        )
+        missing = [
+            method
+            for surface, method in _REQUIRED_METHODS
+            if catalog._entry(method, surface) is None
+        ]
+        if not browser_login and "account/login/start" not in missing:
+            missing.append("account/login/start[type=chatgpt]")
+        missing_required_methods = tuple(missing)
+        dynamic_request_fields = (
+            "threadId",
+            "turnId",
+            "callId",
+            "tool",
+            "arguments",
+        )
+        dynamic_response_fields = ("contentItems", "success")
         return cls(
-            browser_login=(
-                catalog.has_client_request("account/login/start")
-                and catalog.supports_enum(
-                    "account/login/start", ("type",), "chatgpt"
-                )
-            ),
+            browser_login=browser_login,
             device_code_login=catalog.supports_enum(
                 "account/login/start", ("type",), "chatgptDeviceCode"
             ),
@@ -261,6 +345,27 @@ class CodexCapabilities:
             dynamic_tools=(
                 catalog.supports_field("thread/start", ("dynamicTools",))
                 and catalog.has_server_request("item/tool/call")
+                and all(
+                    catalog.supports_field(
+                        "item/tool/call",
+                        field,
+                        surface="server_request",
+                    )
+                    for field in dynamic_request_fields
+                )
+                and all(
+                    catalog.supports_field(
+                        "item/tool/call",
+                        field,
+                        surface="server_response",
+                    )
+                    for field in dynamic_response_fields
+                )
+            ),
+            dynamic_tool_namespace=catalog.supports_field(
+                "item/tool/call",
+                "namespace",
+                surface="server_request",
             ),
             turn_interrupt=catalog.has_client_request("turn/interrupt"),
             thread_archive_or_unsubscribe=(
@@ -292,6 +397,8 @@ class CodexCapabilities:
                 if restricted and network_disabled
                 else None
             ),
+            required_protocol_methods=not missing_required_methods,
+            missing_required_methods=missing_required_methods,
             schema_fingerprint=catalog.fingerprint,
         )
 
@@ -313,6 +420,7 @@ class CodexCapabilities:
             rate_limits=True,
             image_input=True,
             dynamic_tools=True,
+            dynamic_tool_namespace=True,
             turn_interrupt=True,
             thread_archive_or_unsubscribe=True,
             restricted_read_sandbox=restricted_read_sandbox,
@@ -328,22 +436,19 @@ class CodexCapabilities:
                 if restricted_read_sandbox and network_disabled_sandbox
                 else None
             ),
+            required_protocol_methods=True,
+            missing_required_methods=(),
             schema_fingerprint="fake-contract",
         )
 
     def validate_required_surface(self) -> None:
-        missing = []
-        if not self.browser_login:
-            missing.append("account/login/start")
-        if not self.model_list:
-            missing.append("model/list")
-        if not self.turn_interrupt:
-            missing.append("turn/interrupt")
-        if missing:
+        if self.missing_required_methods:
             raise CodexSubscriptionError(
                 "CODEX_PROTOCOL_INCOMPATIBLE",
                 "The installed Codex App Server is missing required methods",
-                details={"missing_methods": missing},
+                details={
+                    "missing_methods": list(self.missing_required_methods),
+                },
             )
         if not (
             self.restricted_read_sandbox and self.network_disabled_sandbox
@@ -434,15 +539,57 @@ def _index_envelope(document: Schema) -> dict[str, _SchemaEntry]:
             continue
         method_schema = properties.get("method")
         params_schema = properties.get("params")
-        if not isinstance(method_schema, dict) or not isinstance(
-            params_schema, dict
-        ):
+        if not isinstance(method_schema, dict):
             continue
+        if not isinstance(params_schema, dict):
+            params_schema = {}
         methods = _enum_values(method_schema, definitions)
         for method in methods:
             if isinstance(method, str):
                 indexed[method] = _SchemaEntry(params_schema, definitions)
     return indexed
+
+
+def _index_responses(
+    documents: dict[str, Schema],
+) -> dict[str, _SchemaEntry]:
+    indexed: dict[str, _SchemaEntry] = {}
+    for method, document in documents.items():
+        definitions = document.get("definitions")
+        definitions = definitions if isinstance(definitions, dict) else {}
+        indexed[method] = _SchemaEntry(document, definitions)
+    return indexed
+
+
+def _read_response_documents(
+    directory: Path,
+    filenames: dict[str, str],
+) -> dict[str, Schema]:
+    documents: dict[str, Schema] = {}
+    for method, filename in filenames.items():
+        path = directory / filename
+        if not path.is_file():
+            continue
+        try:
+            value = json.loads(path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise CodexSubscriptionError(
+                "CODEX_PROTOCOL_INCOMPATIBLE",
+                f"Codex App Server generated invalid {filename}",
+            ) from exc
+        if not isinstance(value, dict):
+            raise CodexSubscriptionError(
+                "CODEX_PROTOCOL_INCOMPATIBLE",
+                f"Codex App Server generated invalid {filename}",
+            )
+        documents[method] = value
+    return documents
+
+
+def _normalize_path(path: str | Iterable[str]) -> tuple[str, ...]:
+    if isinstance(path, str):
+        return tuple(segment for segment in path.split(".") if segment)
+    return tuple(path)
 
 
 def _resolved_copy(entry: _SchemaEntry) -> Schema:

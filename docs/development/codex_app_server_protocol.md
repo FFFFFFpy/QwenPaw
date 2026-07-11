@@ -4,10 +4,9 @@ This document records the protocol surface used by QwenPaw's
 `openai-codex` cloud-subscription provider. The generated upstream schema is
 the source of truth; this file is a deliberately small compatibility contract.
 
-## Observed baseline
+## Observed schema snapshot
 
-- Codex CLI: `codex-cli 0.144.0-alpha.4`
-- Binary: `/Applications/ChatGPT.app/Contents/Resources/codex`
+- Codex CLI observed during schema-only review: `codex-cli 0.144.0-alpha.4`
 - Transport: stdio JSONL, one JSON object per line, JSON-RPC 2.0 semantics with
   the `jsonrpc` member omitted
 - Stable schema SHA-256:
@@ -15,7 +14,9 @@ the source of truth; this file is a deliberately small compatibility contract.
 - Experimental v2 schema SHA-256:
   `f54352a19bec547cede4886b9b3f2ec1995ef5e4815efe435f9ed0d4b8a739ba`
 
-Regenerate these facts with:
+That observed schema did not expose the restricted readable-root shape required
+by QwenPaw and is therefore incompatible for chat. A fingerprint records
+identity, not compatibility. Regenerate schema evidence with:
 
 ```bash
 codex app-server generate-ts --experimental --out /tmp/codex-schema/ts
@@ -57,11 +58,18 @@ does not opt into attestation or MCP elicitation.
 | Built-in side-effect requests | explicitly rejected | command/file/patch/permission/MCP approval methods have registered denial handlers |
 | Thread archive | supported | `thread/archive`; QwenPaw normally uses unsubscribe for ephemeral cycles |
 
-The runtime parses the generated JSON Schema method envelopes and follows
-field paths and enum variants; it does not infer security capabilities from
-text occurrence or a version number. Missing restricted readable roots,
-network disable, or required protocol primitives makes the runtime
-incompatible before a child process or real turn is started.
+The runtime indexes request, response, server-request, client-notification, and
+server-notification schemas. Its public catalog exposes `has_method`,
+`request_schema`, `response_schema`, `notification_schema`,
+`server_request_schema`, `supports_field`, and `supports_enum`. Field paths and
+enum variants are resolved structurally; security capability detection never
+uses description text, substring occurrence, or a version threshold.
+
+Initialization, account read/login/logout, model listing, thread start and
+unsubscribe, turn start and interrupt, agent-message deltas, and turn
+completion are required. Missing any of these, restricted readable roots, or
+network disable makes the Runtime incompatible before App Server startup or a
+real turn.
 
 ## Focused message contract
 
@@ -77,8 +85,10 @@ incompatible before a child process or real turn is started.
 - Text and reasoning notifications must match the active thread and turn.
 - `turn/completed.turn.status` is one of `completed`, `interrupted`, `failed`,
   or `inProgress`; a failed turn carries a structured error.
-- A dynamic tool call contains `threadId`, `turnId`, `callId`, `tool`, and
-  JSON `arguments`. Its response is `{contentItems, success}`.
+- A dynamic tool call schema must contain `threadId`, `turnId`, `callId`,
+  `tool`, and JSON `arguments`; its response schema must contain
+  `contentItems` and `success`. `namespace` is accepted when present and may be
+  a non-null string.
 - Unknown notifications are ignored after a debug log. Unknown server requests
   receive JSON-RPC method-not-found immediately.
 - `item/commandExecution/requestApproval`,
@@ -96,3 +106,6 @@ The probe and provider never read or parse `~/.codex/auth.json`. Authentication
 storage and token refresh remain exclusively owned by the official App Server.
 No access token, refresh token, session cookie, authorization URL query string,
 full user prompt, or tool argument is logged or persisted by QwenPaw.
+
+See [the dedicated security boundary](./codex_subscription_security.md) for
+cleanup, payload-budget, credential, and verification requirements.

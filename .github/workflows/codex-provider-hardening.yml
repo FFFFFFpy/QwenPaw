@@ -1,0 +1,238 @@
+name: Codex Provider Hardening
+
+on:
+  push:
+    paths:
+      - "src/qwenpaw/providers/codex_subscription/**"
+      - "src/qwenpaw/app/routers/codex_subscription.py"
+      - "tests/**/codex_subscription/**"
+      - "tests/integration/test_codex_app_server_smoke.py"
+      - "console/src/**/*codex*"
+      - "console/src/pages/Settings/Models/**"
+      - "docs/**/*codex*"
+      - ".github/workflows/codex-provider-hardening.yml"
+  pull_request:
+    paths:
+      - "src/qwenpaw/providers/codex_subscription/**"
+      - "src/qwenpaw/app/routers/codex_subscription.py"
+      - "tests/**/codex_subscription/**"
+      - "tests/integration/test_codex_app_server_smoke.py"
+      - "console/src/**/*codex*"
+      - "console/src/pages/Settings/Models/**"
+      - "docs/**/*codex*"
+      - ".github/workflows/codex-provider-hardening.yml"
+  workflow_dispatch:
+    inputs:
+      run_real_smoke:
+        description: Run the opt-in smoke against the official Codex CLI
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: read
+
+jobs:
+  backend-full:
+    name: Backend full suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install backend test dependencies
+        run: pip install -e ".[test]"
+      - name: Run backend unit tests
+        run: |
+          mkdir -p artifacts
+          pytest tests/unit --junitxml=artifacts/backend-unit.xml
+      - name: Run backend contract tests in a clean process
+        run: >-
+          pytest tests/contract
+          --junitxml=artifacts/backend-contract.xml
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-backend-full-summary
+          path: artifacts/backend-*.xml
+
+  codex-focused:
+    name: Codex focused suite
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install focused test dependencies
+        run: pip install -e ".[test]"
+      - name: Run focused tests
+        shell: bash
+        run: >-
+          pytest tests/unit/providers/codex_subscription
+          tests/unit/app/routers/test_codex_subscription_router.py
+          --junitxml=codex-focused-${{ runner.os }}.xml
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-focused-${{ runner.os }}
+          path: codex-focused-${{ runner.os }}.xml
+
+  backend-quality:
+    name: Backend typecheck and lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - name: Install quality tools
+        run: pip install -e ".[test]" black==23.3.0 flake8==6.1.0 mypy==1.7.0
+      - name: Black
+        run: >-
+          black --check --fast --line-length=79
+          src/qwenpaw/providers/codex_subscription
+          src/qwenpaw/app/routers/codex_subscription.py
+          tests/unit/providers/codex_subscription
+          tests/unit/app/routers/test_codex_subscription_router.py
+      - name: Flake8
+        run: >-
+          flake8 --extend-ignore=E203
+          src/qwenpaw/providers/codex_subscription
+          src/qwenpaw/app/routers/codex_subscription.py
+          tests/unit/providers/codex_subscription
+          tests/unit/app/routers/test_codex_subscription_router.py
+      - name: Mypy Codex integration
+        run: >-
+          mypy --ignore-missing-imports --follow-imports=skip
+          --disable-error-code=var-annotated
+          --disable-error-code=union-attr
+          --disable-error-code=assignment
+          --disable-error-code=attr-defined
+          --disable-error-code=import-untyped
+          --disable-error-code=truthy-function
+          --explicit-package-bases
+          src/qwenpaw/providers/codex_subscription
+
+  frontend:
+    name: Frontend test, lint, and build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: console
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: console/package-lock.json
+      - run: npm ci
+      - name: Frontend tests
+        run: |
+          mkdir -p ../artifacts
+          npm run test:run -- --reporter=junit \
+            --outputFile=../artifacts/frontend.xml
+      - name: Typecheck and formatting
+        run: npm run format:check
+      - name: Lint Codex provider surfaces
+        run: >-
+          npx eslint
+          src/api/modules/codexSubscription.ts
+          src/api/modules/codexSubscription.test.ts
+          src/api/types/codexSubscription.ts
+          src/pages/Settings/Models/utils.ts
+          src/pages/Settings/Models/utils.test.ts
+          src/pages/Settings/Models/components/cards/SubscriptionProviderCard.tsx
+          src/pages/Settings/Models/components/modals/CodexSubscriptionLoginModal.tsx
+      - name: Production build
+        run: npm run build:prod
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-frontend-summary
+          path: artifacts/frontend.xml
+
+  secret-scan:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: gitleaks/gitleaks-action@v2
+
+  real-binary-smoke:
+    name: Optional real Codex binary smoke
+    if: >-
+      github.event_name == 'workflow_dispatch' &&
+      inputs.run_real_smoke
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - name: Install official Codex CLI and test dependencies
+        run: |
+          npm install --global @openai/codex
+          pip install -e ".[test]"
+      - name: Run explicitly enabled real-binary smoke
+        env:
+          QWENPAW_RUN_CODEX_SMOKE: "1"
+        run: >-
+          pytest tests/integration/test_codex_app_server_smoke.py
+          --junitxml=codex-real-smoke.xml
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: codex-real-smoke-summary
+          path: codex-real-smoke.xml
+
+  summary:
+    name: Publish test summary
+    if: always()
+    needs:
+      - backend-full
+      - codex-focused
+      - backend-quality
+      - frontend
+      - secret-scan
+      - real-binary-smoke
+    runs-on: ubuntu-latest
+    steps:
+      - name: Write summary
+        env:
+          BACKEND: ${{ needs.backend-full.result }}
+          FOCUSED: ${{ needs.codex-focused.result }}
+          QUALITY: ${{ needs.backend-quality.result }}
+          FRONTEND: ${{ needs.frontend.result }}
+          SECRETS: ${{ needs.secret-scan.result }}
+          REAL_SMOKE: ${{ needs.real-binary-smoke.result }}
+        run: |
+          mkdir -p summary
+          {
+            echo "# Codex provider hardening"
+            echo
+            echo "- Backend full: $BACKEND"
+            echo "- Codex focused: $FOCUSED"
+            echo "- Backend quality: $QUALITY"
+            echo "- Frontend: $FRONTEND"
+            echo "- Secret scan: $SECRETS"
+            echo "- Optional real smoke: $REAL_SMOKE"
+          } | tee summary/codex-provider-summary.md >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: codex-provider-test-summary
+          path: summary/codex-provider-summary.md
