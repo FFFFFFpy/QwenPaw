@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
+# -*- coding: utf-8 -*-
 """Scriptable JSONL fake used by runtime integration tests."""
+
+# pylint: disable=too-many-branches,too-many-statements
 
 from __future__ import annotations
 
@@ -22,6 +25,7 @@ async def main() -> None:
     turn_counter = 0
     dynamic_threads: set[str] = set()
     pending_tool_turn: tuple[str, str] | None = None
+    pending_blocked_request: int | str | None = None
 
     async def finish_turn(
         thread_id: str,
@@ -67,6 +71,20 @@ async def main() -> None:
                     "tool complete",
                 )
                 pending_tool_turn = None
+            continue
+        if method is None and request_id == "blocked-fake":
+            if pending_blocked_request is not None:
+                error = message.get("error")
+                error_code = (
+                    error.get("code") if isinstance(error, dict) else None
+                )
+                await send(
+                    {
+                        "id": pending_blocked_request,
+                        "result": {"errorCode": error_code},
+                    },
+                )
+                pending_blocked_request = None
             continue
         if method == "initialize":
             await send(
@@ -165,6 +183,25 @@ async def main() -> None:
                     },
                 },
             )
+        elif method == "mcpServerStatus/list":
+            await send(
+                {
+                    "id": request_id,
+                    "result": {
+                        "data": [
+                            {
+                                "name": "fixture-mcp",
+                                "serverInfo": None,
+                                "tools": {},
+                                "resources": [],
+                                "resourceTemplates": [],
+                                "authStatus": "unsupported",
+                            },
+                        ],
+                        "nextCursor": None,
+                    },
+                },
+            )
         elif method == "account/rateLimits/read":
             await send(
                 {
@@ -194,36 +231,37 @@ async def main() -> None:
             turn_counter += 1
             turn_id = f"turn-{turn_counter}"
             thread_id = str(params.get("threadId"))
-            await send(
-                {"id": request_id, "result": {"turn": {"id": turn_id}}},
-            )
             serialized_input = json.dumps(params.get("input", []))
-            if "WAIT_FOREVER" in serialized_input:
-                continue
             if thread_id in dynamic_threads:
                 pending_tool_turn = (thread_id, turn_id)
-
-                async def request_tool(
-                    tool_thread_id: str = thread_id,
-                    tool_turn_id: str = turn_id,
-                ) -> None:
-                    await asyncio.sleep(0.01)
-                    await send(
-                        {
-                            "id": "tool-fake",
-                            "method": "item/tool/call",
-                            "params": {
-                                "threadId": tool_thread_id,
-                                "turnId": tool_turn_id,
-                                "callId": "call-fake",
-                                "tool": "lookup",
-                                "arguments": {"query": "fixture"},
-                            },
+                await send(
+                    {
+                        "id": "tool-fake",
+                        "method": "item/tool/call",
+                        "params": {
+                            "threadId": thread_id,
+                            "turnId": turn_id,
+                            "callId": "call-fake",
+                            "tool": "lookup",
+                            "arguments": {"query": "fixture"},
                         },
-                    )
-
-                asyncio.create_task(request_tool())
+                    },
+                )
+                await send(
+                    {
+                        "id": request_id,
+                        "result": {"turn": {"id": turn_id}},
+                    },
+                )
             else:
+                await send(
+                    {
+                        "id": request_id,
+                        "result": {"turn": {"id": turn_id}},
+                    },
+                )
+                if "WAIT_FOREVER" in serialized_input:
+                    continue
                 asyncio.create_task(finish_turn(thread_id, turn_id))
         elif method in {"turn/interrupt", "thread/unsubscribe"}:
             await send({"id": request_id, "result": {}})
@@ -259,6 +297,15 @@ async def main() -> None:
                 },
             )
             await send({"id": request_id, "result": {}})
+        elif method == "test/blockedServerRequest":
+            pending_blocked_request = request_id
+            await send(
+                {
+                    "id": "blocked-fake",
+                    "method": params["method"],
+                    "params": {},
+                },
+            )
         elif method == "test/error":
             await send(
                 {

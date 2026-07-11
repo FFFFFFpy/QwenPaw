@@ -1,8 +1,13 @@
+# -*- coding: utf-8 -*-
 """Lifecycle manager for the official local Codex App Server process."""
+
+# pylint: disable=too-many-branches,too-many-statements,try-except-raise
 
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Coroutine
+from dataclasses import replace
 from enum import Enum
 import logging
 from pathlib import Path
@@ -10,7 +15,7 @@ import secrets
 import signal
 import subprocess
 import sys
-from typing import Any, Callable, Sequence
+from typing import Any, Sequence
 
 from qwenpaw.__version__ import __version__
 
@@ -26,6 +31,7 @@ from .schema_capabilities import (
     detect_binary_capabilities,
 )
 from .settings import CodexSubscriptionSettings, discover_codex_binary
+from .tool_bridge import get_tool_registry
 
 logger = logging.getLogger(__name__)
 
@@ -63,12 +69,16 @@ class CodexAppServerRuntime:
         self._rpc: JsonRpcClient | None = None
         self._stderr_task: asyncio.Task[None] | None = None
         self._monitor_task: asyncio.Task[None] | None = None
+        self._background_tasks: set[asyncio.Task[Any]] = set()
+        self._background_errors: list[BaseException] = []
+        self._turn_cleanup_error: CodexSubscriptionError | None = None
         self._stopping = False
         self.initialize_result: dict[str, Any] = {}
         self.capabilities: CodexCapabilities | None = None
         self.binary_path: str | None = None
         self.binary_version: str | None = None
         self.generation_id = ""
+        self._mcp_server_names: tuple[str, ...] | None = None
 
     @property
     def state(self) -> RuntimeState:
@@ -82,6 +92,76 @@ class CodexAppServerRuntime:
                 "Codex App Server is not initialized",
             )
         return self._rpc
+
+    @property
+    def background_task_count(self) -> int:
+        return len(self._background_tasks)
+
+    @property
+    def background_errors(self) -> tuple[BaseException, ...]:
+        return tuple(self._background_errors)
+
+    @property
+    def turn_cleanup_error(self) -> CodexSubscriptionError | None:
+        return self._turn_cleanup_error
+
+    def create_background_task(
+        self,
+        coroutine: Coroutine[Any, Any, Any],
+        *,
+        name: str,
+    ) -> asyncio.Task[Any]:
+        """Create a runtime-owned task whose completion is always observed."""
+
+        task = asyncio.create_task(coroutine, name=name)
+        self._background_tasks.add(task)
+
+        def completed(done: asyncio.Task[Any]) -> None:
+            self._background_tasks.discard(done)
+            if done.cancelled():
+                return
+            error = done.exception()
+            if error is not None:
+                self._background_errors.append(error)
+                logger.warning(
+                    "Codex background task failed generation=%s task=%s",
+                    self.generation_id,
+                    done.get_name(),
+                )
+
+        task.add_done_callback(completed)
+        return task
+
+    async def wait_background_tasks(self) -> None:
+        """Wait for runtime-owned tasks, including spawned cleanup, to end."""
+
+        while self._background_tasks:
+            tasks = tuple(self._background_tasks)
+            await asyncio.gather(*tasks, return_exceptions=True)
+            # Python 3.13 may resume this waiter before task done-callbacks
+            # have discarded the completed snapshot. Remove it explicitly so
+            # repeatedly gathering already-finished tasks cannot starve those
+            # callbacks in a busy loop. Yield once so error observers run
+            # before the drain is reported complete.
+            self._background_tasks.difference_update(tasks)
+            await asyncio.sleep(0)
+
+    def mark_turn_cleanup_failed(
+        self,
+        error: CodexSubscriptionError,
+    ) -> None:
+        self._turn_cleanup_error = error
+
+    def clear_turn_cleanup_error(
+        self,
+        error: CodexSubscriptionError | None = None,
+    ) -> None:
+        if error is None or self._turn_cleanup_error is error:
+            self._turn_cleanup_error = None
+
+    def assert_turn_start_allowed(self) -> None:
+        if self._turn_cleanup_error is not None:
+            raise self._turn_cleanup_error
 
     async def start(self) -> None:
         async with self._state_lock:
@@ -98,12 +178,23 @@ class CodexAppServerRuntime:
                     )
                     self.binary_path = binary
                     self.binary_version = await self._read_binary_version(
-                        binary
+                        binary,
                     )
                     self.capabilities = (
                         self._provided_capabilities
                         or await detect_binary_capabilities(binary)
                     )
+                    if self._provided_capabilities is None:
+                        fingerprint = self.capabilities.schema_fingerprint
+                        verified_fingerprints = (
+                            self.settings.tool_isolation_verified_fingerprints
+                        )
+                        self.capabilities = replace(
+                            self.capabilities,
+                            tool_isolation_verified=(
+                                fingerprint in verified_fingerprints
+                            ),
+                        )
                     command: tuple[str, ...] = (
                         binary,
                         "app-server",
@@ -116,12 +207,20 @@ class CodexAppServerRuntime:
                         self._provided_capabilities
                         or CodexCapabilities.focused_contract()
                     )
+                capabilities = self.capabilities
+                if capabilities is None:
+                    raise CodexSubscriptionError(
+                        "CODEX_PROTOCOL_INCOMPATIBLE",
+                        "Codex capabilities were not detected",
+                    )
+                capabilities.validate_required_surface()
                 self.generation_id = secrets.token_hex(4)
+                self._mcp_server_names = None
                 subprocess_kwargs: dict[str, Any] = {}
                 if sys.platform == "win32":
-                    subprocess_kwargs["creationflags"] = (
-                        subprocess.CREATE_NEW_PROCESS_GROUP
-                    )
+                    subprocess_kwargs[
+                        "creationflags"
+                    ] = subprocess.CREATE_NEW_PROCESS_GROUP
                 self._process = await asyncio.create_subprocess_exec(
                     *command,
                     stdin=asyncio.subprocess.PIPE,
@@ -138,6 +237,8 @@ class CodexAppServerRuntime:
                     max_message_bytes=self.settings.max_message_bytes,
                     default_timeout=self.settings.request_timeout_seconds,
                 )
+                self._register_blocked_server_requests()
+                get_tool_registry(self).bind_generation()
                 self._rpc.start()
                 if self._process.stderr is not None:
                     self._stderr_task = asyncio.create_task(
@@ -154,20 +255,22 @@ class CodexAppServerRuntime:
                         },
                         "capabilities": {
                             "experimentalApi": bool(
-                                self.capabilities.dynamic_tools,
+                                capabilities.dynamic_tools,
                             ),
                             "requestAttestation": False,
                         },
                     },
                 )
                 await self._rpc.notify("initialized", {})
+                self._turn_cleanup_error = None
+                self._background_errors.clear()
                 self._state = RuntimeState.READY
                 logger.info(
                     "Codex runtime ready generation=%s version=%s schema=%s "
                     "platform=%s/%s",
                     self.generation_id,
                     self.binary_version or "unknown",
-                    self.capabilities.schema_fingerprint[:12],
+                    capabilities.schema_fingerprint[:12],
                     self.initialize_result.get("platformFamily", "unknown"),
                     self.initialize_result.get("platformOs", "unknown"),
                 )
@@ -179,7 +282,10 @@ class CodexAppServerRuntime:
                 await self._cleanup_process()
                 if exc.error_code == "CODEX_NOT_INSTALLED":
                     self._state = RuntimeState.NOT_INSTALLED
-                elif exc.error_code == "CODEX_PROTOCOL_INCOMPATIBLE":
+                elif exc.error_code in {
+                    "CODEX_PROTOCOL_INCOMPATIBLE",
+                    "CODEX_SANDBOX_UNSUPPORTED",
+                }:
                     self._state = RuntimeState.INCOMPATIBLE
                 else:
                     self._state = RuntimeState.CRASHED
@@ -195,6 +301,14 @@ class CodexAppServerRuntime:
 
     async def stop(self) -> None:
         async with self._state_lock:
+            if (
+                self._state is RuntimeState.STOPPED
+                and not self._background_tasks
+            ):
+                return
+            # Cleanup requests need a READY RPC connection. Drain them before
+            # transitioning the runtime to STOPPING or closing stdio.
+            await self.wait_background_tasks()
             if self._state is RuntimeState.STOPPED:
                 return
             self._state = RuntimeState.STOPPING
@@ -233,6 +347,39 @@ class CodexAppServerRuntime:
             )
         await self._rpc.notify(method, params)
 
+    async def list_mcp_server_names(self) -> tuple[str, ...]:
+        """Return effective MCP server names without exposing tool payloads."""
+
+        if self._mcp_server_names is not None:
+            return self._mcp_server_names
+        names: set[str] = set()
+        cursor: str | None = None
+        for _ in range(100):
+            response = await self.request(
+                "mcpServerStatus/list",
+                {
+                    "cursor": cursor,
+                    "limit": 100,
+                    "detail": "toolsAndAuthOnly",
+                },
+            )
+            rows = response.get("data")
+            if not isinstance(rows, list):
+                raise CodexSubscriptionError(
+                    "CODEX_PROTOCOL_INCOMPATIBLE",
+                    "Codex returned an invalid MCP server inventory",
+                )
+            for row in rows:
+                name = row.get("name") if isinstance(row, dict) else None
+                if isinstance(name, str) and name:
+                    names.add(name)
+            next_cursor = response.get("nextCursor")
+            if not isinstance(next_cursor, str) or not next_cursor:
+                break
+            cursor = next_cursor
+        self._mcp_server_names = tuple(sorted(names))
+        return self._mcp_server_names
+
     def subscribe(
         self,
         method: str,
@@ -248,6 +395,30 @@ class CodexAppServerRuntime:
         handler: ServerRequestHandler,
     ) -> None:
         self.rpc.register_server_request(method, handler)
+
+    def _register_blocked_server_requests(self) -> None:
+        if self._rpc is None:
+            return
+
+        async def reject_side_effect(
+            params: dict[str, Any],
+        ) -> dict[str, Any]:
+            del params
+            raise CodexSubscriptionError(
+                "CODEX_BUILTIN_SIDE_EFFECT_BLOCKED",
+                "QwenPaw rejected a Codex built-in side-effect request",
+            )
+
+        for method in (
+            "item/commandExecution/requestApproval",
+            "item/fileChange/requestApproval",
+            "item/permissions/requestApproval",
+            "item/tool/requestUserInput",
+            "mcpServer/elicitation/request",
+            "execCommandApproval",
+            "applyPatchApproval",
+        ):
+            self._rpc.register_server_request(method, reject_side_effect)
 
     async def redetect(self) -> None:
         await self.stop()
@@ -308,6 +479,7 @@ class CodexAppServerRuntime:
                 await asyncio.gather(task, return_exceptions=True)
         self._stderr_task = None
         self._monitor_task = None
+        self._mcp_server_names = None
 
     @staticmethod
     async def _read_binary_version(binary: str) -> str | None:

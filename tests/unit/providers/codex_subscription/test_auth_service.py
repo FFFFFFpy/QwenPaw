@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import asyncio
@@ -23,14 +24,34 @@ async def test_account_reads_are_cached_and_update_invalidates(stub_runtime):
     await service.read_account()
     await service.read_account()
     assert [method for method, _ in stub_runtime.requests].count(
-        "account/read"
+        "account/read",
     ) == 1
 
     stub_runtime.emit("account/updated", {})
     await service.read_account()
     assert [method for method, _ in stub_runtime.requests].count(
-        "account/read"
+        "account/read",
     ) == 2
+
+
+async def test_expired_ttl_preserves_last_known_connected_without_io(
+    stub_runtime,
+):
+    service = AuthService(stub_runtime, account_cache_ttl_seconds=0)
+    await service.read_account()
+    reads_before = [method for method, _ in stub_runtime.requests].count(
+        "account/read",
+    )
+
+    state, account = service.cached_account()
+
+    assert state == "connected"
+    assert account is not None and account.connected is True
+    assert service.account_state_stale is True
+    assert service.account_checked_at is not None
+    assert [method for method, _ in stub_runtime.requests].count(
+        "account/read",
+    ) == reads_before
 
 
 async def test_browser_and_device_login(stub_runtime):

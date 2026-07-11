@@ -3,6 +3,7 @@
 """Tests for the encrypted secret store layer."""
 from __future__ import annotations
 
+import os
 from pathlib import Path
 from unittest.mock import patch
 
@@ -17,6 +18,14 @@ from qwenpaw.security.secret_store import (
     encrypt_dict_fields,
     is_encrypted,
 )
+
+
+def test_pytest_process_disables_os_keyring() -> None:
+    """The test harness must never reach a developer's OS keyring."""
+    import qwenpaw.security.secret_store as mod
+
+    assert os.environ.get("QWENPAW_DISABLE_KEYRING") == "1"
+    assert mod._should_skip_keyring() is True
 
 
 @pytest.fixture(autouse=True)

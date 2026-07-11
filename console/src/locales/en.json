@@ -1491,6 +1491,7 @@
     "llmConfiguration": "LLM Configuration",
     "codexSubscription": {
       "cloudSubscription": "Cloud Subscription",
+      "experimental": "Experimental cloud subscription",
       "runtime": "Runtime",
       "runtimeStates": {
         "not_installed": "Not installed",
@@ -1502,7 +1503,11 @@
         "stopping": "Stopping"
       },
       "account": "Account",
+      "notChecked": "Not checked",
       "notConnected": "Not connected",
+      "statusMayBeOutdated": "status may be outdated",
+      "reasoningEffortInvalid": "The saved reasoning effort is no longer supported. Choose another value.",
+      "needsReview": "Needs review",
       "plan": "Plan",
       "modelsLabel": "Models",
       "usage": "Usage",

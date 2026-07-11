@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -8,6 +9,9 @@ from fastapi.testclient import TestClient
 from qwenpaw.app.routers.codex_subscription import router
 from qwenpaw.providers.codex_subscription.provider import (
     CodexSubscriptionProvider,
+)
+from qwenpaw.providers.codex_subscription.settings import (
+    CodexSubscriptionSettings,
 )
 from tests.unit.providers.codex_subscription.conftest import StubRuntime
 
@@ -57,6 +61,15 @@ def test_account_response_is_masked_and_token_free() -> None:
     assert "token" not in response.text.lower()
 
 
+def test_runtime_status_is_read_only_for_provider_list() -> None:
+    app, runtime = _application()
+    response = TestClient(app).get("/api/providers/openai-codex/runtime")
+    assert response.status_code == 200
+    assert response.json()["state"] == "stopped"
+    assert runtime.state.value == "stopped"
+    assert not runtime.requests
+
+
 def test_browser_login_uses_dedicated_app_server_flow() -> None:
     app, runtime = _application()
     response = TestClient(app).post(
@@ -74,3 +87,19 @@ def test_browser_login_uses_dedicated_app_server_flow() -> None:
             "appBrand": "chatgpt",
         },
     ) in runtime.requests
+
+
+def test_settings_api_cannot_forge_tool_isolation_verification() -> None:
+    app, runtime = _application()
+    verified = "a" * 64
+    runtime.settings = CodexSubscriptionSettings(
+        tool_isolation_verified_fingerprints=[verified],
+    )
+
+    response = TestClient(app).put(
+        "/api/providers/openai-codex/settings",
+        json={"tool_isolation_verified_fingerprints": ["b" * 64]},
+    )
+
+    assert response.status_code == 422
+    assert runtime.settings.tool_isolation_verified_fingerprints == [verified]

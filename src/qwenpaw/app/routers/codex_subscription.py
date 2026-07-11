@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Dedicated API for the built-in OpenAI Codex subscription provider."""
 
 from __future__ import annotations
@@ -5,7 +6,7 @@ from __future__ import annotations
 from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 from qwenpaw.constant import SECRET_DIR
 from qwenpaw.providers.codex_subscription.auth_service import (
@@ -41,6 +42,7 @@ class RuntimeStatusResponse(BaseModel):
     capabilities: dict[str, Any] | None = None
     error_code: str | None = None
     message: str | None = None
+    remediation: str | None = None
 
 
 class LoginStartRequest(BaseModel):
@@ -60,9 +62,12 @@ class SettingsResponse(BaseModel):
     binary_path: str
     preferred_login_flow: Literal["browser", "device_code"]
     tool_wait_timeout_seconds: float
+    tool_isolation_verified_fingerprints: list[str]
 
 
 class SettingsUpdateRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
     binary_path: str | None = None
     preferred_login_flow: Literal["browser", "device_code"] | None = None
     tool_wait_timeout_seconds: float | None = Field(
@@ -115,14 +120,14 @@ def _raise_http(exc: CodexSubscriptionError) -> NoReturn:
 async def runtime_status(
     manager: ProviderManager = Depends(_manager),
 ) -> RuntimeStatusResponse:
-    provider = _provider(manager)
-    runtime = provider.runtime
-    error: CodexSubscriptionError | None = None
-    if runtime.state is not RuntimeState.READY:
-        try:
-            await runtime.start()
-        except CodexSubscriptionError as exc:
-            error = exc
+    runtime = _provider(manager).runtime
+    return _runtime_status_response(runtime)
+
+
+def _runtime_status_response(
+    runtime: Any,
+    error: CodexSubscriptionError | None = None,
+) -> RuntimeStatusResponse:
     capabilities = runtime.capabilities
     return RuntimeStatusResponse(
         state=runtime.state.value,
@@ -133,6 +138,7 @@ async def runtime_status(
         capabilities=capabilities.model_dump() if capabilities else None,
         error_code=error.error_code if error else None,
         message=str(error) if error else None,
+        remediation=error.remediation if error else None,
     )
 
 
@@ -141,11 +147,12 @@ async def runtime_redetect(
     manager: ProviderManager = Depends(_manager),
 ) -> RuntimeStatusResponse:
     provider = _provider(manager)
+    error: CodexSubscriptionError | None = None
     try:
         await provider.runtime.redetect()
-    except CodexSubscriptionError:
-        pass
-    return await runtime_status(manager)
+    except CodexSubscriptionError as exc:
+        error = exc
+    return _runtime_status_response(provider.runtime, error)
 
 
 @router.get("/account", response_model=CodexAccountStatus)
@@ -233,6 +240,9 @@ async def read_settings(
         binary_path=settings.binary_path,
         preferred_login_flow=settings.preferred_login_flow,
         tool_wait_timeout_seconds=settings.tool_wait_timeout_seconds,
+        tool_isolation_verified_fingerprints=(
+            settings.tool_isolation_verified_fingerprints
+        ),
     )
 
 
@@ -257,7 +267,7 @@ async def update_settings(
     if body.tool_wait_timeout_seconds is not None:
         updates["tool_wait_timeout_seconds"] = body.tool_wait_timeout_seconds
     provider.runtime.settings = CodexSubscriptionSettings.model_validate(
-        updates
+        updates,
     )
     settings_path = SECRET_DIR / "codex_subscription" / "settings.json"
     provider.runtime.settings.save(settings_path)

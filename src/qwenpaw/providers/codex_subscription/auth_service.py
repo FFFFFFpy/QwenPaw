@@ -1,8 +1,10 @@
+# -*- coding: utf-8 -*-
 """ChatGPT subscription authentication delegated to Codex App Server."""
 
 from __future__ import annotations
 
 import asyncio
+from dataclasses import dataclass
 import secrets
 import time
 from typing import Literal
@@ -18,6 +20,17 @@ class CodexAccountStatus(BaseModel):
     email_masked: str | None = None
     plan_type: str | None = None
     auth_type: str | None = None
+
+
+AccountState = Literal["unknown", "connected", "disconnected"]
+
+
+@dataclass
+class AccountCache:
+    snapshot: CodexAccountStatus | None = None
+    generation_id: str = ""
+    checked_at: float | None = None
+    refresh_after: float | None = None
 
 
 class LoginStartResult(BaseModel):
@@ -70,9 +83,7 @@ class AuthService:
         self._account_lock = asyncio.Lock()
         self._sessions: dict[str, _LoginSession] = {}
         self._subscribed_generation = ""
-        self._account_cache: CodexAccountStatus | None = None
-        self._account_cache_generation = ""
-        self._account_cache_time = 0.0
+        self._account_cache = AccountCache()
 
     async def ensure_runtime(self) -> None:
         if self.runtime.state is not RuntimeState.READY:
@@ -105,17 +116,43 @@ class AuthService:
                 status = CodexAccountStatus(
                     connected=True,
                     email_masked=_mask_email(
-                        email if isinstance(email, str) else None
+                        email if isinstance(email, str) else None,
                     ),
                     plan_type=(
                         str(plan_type) if plan_type is not None else None
                     ),
                     auth_type="chatgpt",
                 )
-            self._account_cache = status
-            self._account_cache_generation = self.runtime.generation_id
-            self._account_cache_time = time.monotonic()
+            self._store_account(status)
             return status.model_copy()
+
+    def cached_account(
+        self,
+    ) -> tuple[AccountState, CodexAccountStatus | None]:
+        """Return last-known account state without runtime or auth I/O."""
+
+        self._sync_cache_generation()
+        account = self._account_cache.snapshot
+        if account is None:
+            return "unknown", None
+        if account.connected:
+            return "connected", account.model_copy()
+        return "disconnected", account.model_copy()
+
+    @property
+    def account_state_stale(self) -> bool:
+        self._sync_cache_generation()
+        cache = self._account_cache
+        return bool(
+            cache.snapshot is not None
+            and cache.refresh_after is not None
+            and time.monotonic() >= cache.refresh_after,
+        )
+
+    @property
+    def account_checked_at(self) -> float | None:
+        self._sync_cache_generation()
+        return self._account_cache.checked_at
 
     async def start_login(
         self,
@@ -133,7 +170,8 @@ class AuthService:
                 else {"type": "chatgptDeviceCode"}
             )
             response = await self.runtime.request(
-                "account/login/start", params
+                "account/login/start",
+                params,
             )
             login_id = response.get("loginId")
             if not isinstance(login_id, str) or not login_id:
@@ -183,7 +221,8 @@ class AuthService:
         session = self._sessions.get(state)
         if session is None:
             return LoginStatus(
-                status="failed", error="Login session not found"
+                status="failed",
+                error="Login session not found",
             )
         if (
             session.status == "pending"
@@ -219,7 +258,7 @@ class AuthService:
     async def logout(self) -> None:
         await self.ensure_runtime()
         await self.runtime.request("account/logout", None)
-        self._invalidate_account_cache()
+        self._store_account(CodexAccountStatus(connected=False))
         for session in self._sessions.values():
             if session.status == "pending":
                 session.status = "cancelled"
@@ -228,7 +267,7 @@ class AuthService:
         generation = self.runtime.generation_id
         if self._subscribed_generation == generation:
             return
-        self._invalidate_account_cache()
+        self._reset_account_cache(generation)
         self.runtime.subscribe(
             "account/login/completed",
             self._on_login_completed,
@@ -237,7 +276,7 @@ class AuthService:
         self._subscribed_generation = generation
 
     def _on_login_completed(self, params: dict) -> None:
-        self._invalidate_account_cache()
+        self._mark_account_stale()
         login_id = params.get("loginId")
         for session in self._sessions.values():
             if session.result.login_id != login_id:
@@ -251,26 +290,44 @@ class AuthService:
 
     def _on_account_updated(self, params: dict) -> None:
         del params
-        self._invalidate_account_cache()
+        self._mark_account_stale()
 
     def _get_cached_account(
         self,
         *,
         force: bool,
     ) -> CodexAccountStatus | None:
-        if force or self._account_cache is None:
+        self._sync_cache_generation()
+        cache = self._account_cache
+        if force or cache.snapshot is None:
             return None
-        if self._account_cache_generation != self.runtime.generation_id:
+        if (
+            cache.refresh_after is not None
+            and time.monotonic() >= cache.refresh_after
+        ):
             return None
-        age = time.monotonic() - self._account_cache_time
-        if age >= self.account_cache_ttl_seconds:
-            return None
-        return self._account_cache.model_copy()
+        return cache.snapshot.model_copy()
 
-    def _invalidate_account_cache(self) -> None:
-        self._account_cache = None
-        self._account_cache_generation = ""
-        self._account_cache_time = 0.0
+    def _store_account(self, status: CodexAccountStatus) -> None:
+        self._account_cache = AccountCache(
+            snapshot=status.model_copy(),
+            generation_id=self.runtime.generation_id,
+            checked_at=time.time(),
+            refresh_after=time.monotonic() + self.account_cache_ttl_seconds,
+        )
+
+    def _mark_account_stale(self) -> None:
+        self._sync_cache_generation()
+        if self._account_cache.snapshot is not None:
+            self._account_cache.refresh_after = 0.0
+
+    def _sync_cache_generation(self) -> None:
+        generation = self.runtime.generation_id
+        if self._account_cache.generation_id != generation:
+            self._reset_account_cache(generation)
+
+    def _reset_account_cache(self, generation: str = "") -> None:
+        self._account_cache = AccountCache(generation_id=generation)
 
 
 def _mask_email(email: str | None) -> str | None:

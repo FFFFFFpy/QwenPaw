@@ -13,6 +13,9 @@ export interface ModelInfo {
   thinking_enabled: boolean | null;
   thinking_budget: number | null;
   reasoning_effort: string | null;
+  catalog_default_reasoning_effort?: string | null;
+  reasoning_effort_config_invalid?: boolean;
+  catalog_max_input_length?: number | null;
   /** Per-model override: 'budget' or 'effort'. Falls back to provider-level. */
   thinking_param_style?: "budget" | "effort" | null;
   /** Per-model override for reasoning_effort options. */

@@ -15,9 +15,10 @@ export interface CodexRuntimeStatus {
   binary_path: string | null;
   binary_version: string | null;
   generation_id: string | null;
-  capabilities: Record<string, boolean | string | null> | null;
+  capabilities: Record<string, boolean | string | string[] | null> | null;
   error_code: string | null;
   message: string | null;
+  remediation: string | null;
 }
 
 export interface CodexAccountStatus {
@@ -75,6 +76,7 @@ export interface CodexSubscriptionSettings {
   binary_path: string;
   preferred_login_flow: CodexLoginFlow;
   tool_wait_timeout_seconds: number;
+  tool_isolation_verified_fingerprints: string[];
 }
 
 export interface CodexSubscriptionSettingsUpdate {

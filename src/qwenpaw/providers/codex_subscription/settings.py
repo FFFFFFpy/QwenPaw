@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Non-secret Codex subscription settings and binary discovery."""
 
 from __future__ import annotations
@@ -5,12 +6,15 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
 from .errors import CodexSubscriptionError
+
+_SCHEMA_FINGERPRINT = re.compile(r"^[0-9a-f]{64}$")
 
 
 class CodexSubscriptionSettings(BaseModel):
@@ -25,6 +29,10 @@ class CodexSubscriptionSettings(BaseModel):
     request_timeout_seconds: float = Field(default=30.0, gt=0, le=600)
     tool_wait_timeout_seconds: float = Field(default=600.0, gt=0, le=3600)
     max_message_bytes: int = Field(default=4 * 1024 * 1024, ge=65536)
+    max_attachment_bytes: int = Field(default=8 * 1024 * 1024, ge=65536)
+    tool_isolation_verified_fingerprints: list[str] = Field(
+        default_factory=list,
+    )
 
     @classmethod
     def load(cls, path: Path) -> "CodexSubscriptionSettings":
@@ -51,6 +59,23 @@ class CodexSubscriptionSettings(BaseModel):
         except OSError:
             pass
         os.replace(temporary, path)
+
+    def record_tool_isolation_verification(
+        self,
+        fingerprint: str,
+        path: Path,
+    ) -> None:
+        """Persist a successful account-backed isolation probe result."""
+
+        if not _SCHEMA_FINGERPRINT.fullmatch(fingerprint):
+            raise CodexSubscriptionError(
+                "CODEX_PROTOCOL_INCOMPATIBLE",
+                "Codex schema fingerprint is invalid",
+            )
+        self.tool_isolation_verified_fingerprints = sorted(
+            {*self.tool_isolation_verified_fingerprints, fingerprint},
+        )
+        self.save(path)
 
 
 def discover_codex_binary(custom_path: str | None = None) -> str:

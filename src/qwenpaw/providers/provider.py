@@ -96,6 +96,21 @@ class ModelInfo(BaseModel):
         description="Reasoning effort level: 'low', 'medium', 'high'. "
         "Used by OpenAI-family providers.",
     )
+    catalog_default_reasoning_effort: str | None = Field(
+        default=None,
+        description="Provider catalog default, separate from the user choice.",
+    )
+    reasoning_effort_config_invalid: bool = Field(
+        default=False,
+        description=(
+            "Whether the saved effort is absent from the live catalog."
+        ),
+    )
+    catalog_max_input_length: int | None = Field(
+        default=None,
+        ge=1000,
+        description="Provider catalog context size used to detect overrides.",
+    )
     thinking_param_style: str | None = Field(
         default=None,
         description="Override provider-level thinking_param_style for this "

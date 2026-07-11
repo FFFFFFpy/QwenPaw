@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Built-in OpenAI Codex cloud-subscription provider."""
 
 from __future__ import annotations
@@ -13,7 +14,7 @@ from .auth_service import AuthService
 from .errors import CodexSubscriptionError
 from .model_catalog import ModelCatalog
 from .rate_limits import RateLimitService
-from .runtime import CodexAppServerRuntime, RuntimeState, get_codex_runtime
+from .runtime import CodexAppServerRuntime, get_codex_runtime
 
 
 class CodexSubscriptionProvider(Provider):
@@ -71,7 +72,11 @@ class CodexSubscriptionProvider(Provider):
                 "CODEX_NOT_LOGGED_IN",
                 "Connect ChatGPT before refreshing Codex models",
             )
-        models = await self._catalog.fetch()
+        existing_rows = self.model_dump().get("extra_models", [])
+        existing_models = [
+            ModelInfo.model_validate(row) for row in existing_rows
+        ]
+        models = await self._catalog.fetch(existing_models)
         self.extra_models = [model.model_copy(deep=True) for model in models]
         return models
 
@@ -101,12 +106,7 @@ class CodexSubscriptionProvider(Provider):
 
     async def get_info(self, mock_secret: bool = True) -> ProviderInfo:
         del mock_secret
-        account = None
-        if self._runtime.state is RuntimeState.READY:
-            try:
-                account = await self._auth.read_account()
-            except Exception:
-                pass
+        account_state, account = self._auth.cached_account()
         data = self.model_dump()
         data["api_key"] = ""
         data["oauth_connected"] = bool(account and account.connected)
@@ -117,6 +117,9 @@ class CodexSubscriptionProvider(Provider):
             "runtime_kind": "codex_app_server",
             **self.meta,
             "runtime_state": self._runtime.state.value,
+            "account_state": account_state,
+            "account_state_stale": self._auth.account_state_stale,
+            "account_checked_at": self._auth.account_checked_at,
             "binary_path": self._runtime.binary_path,
             "account_email_masked": (
                 account.email_masked if account is not None else None
@@ -136,13 +139,25 @@ class CodexSubscriptionProvider(Provider):
                 "CODEX_MODEL_UNAVAILABLE",
                 f"Codex model '{model_id}' is not available",
             )
+        if model.reasoning_effort_config_invalid:
+            raise CodexSubscriptionError(
+                "CODEX_REASONING_EFFORT_UNSUPPORTED",
+                "The saved reasoning effort is no longer supported by this "
+                "Codex model",
+                remediation="Choose a supported reasoning effort and retry.",
+                details={
+                    "supported_efforts": model.reasoning_effort_options or [],
+                },
+            )
         return CodexSubscriptionChatModel(
             credential=CodexSubscriptionCredential(
                 id="qwenpaw-openai-codex",
                 name="ChatGPT subscription managed by Codex",
             ),
             model=model_id,
-            parameters=CodexSubscriptionChatModel.Parameters(),
+            parameters=CodexSubscriptionChatModel.Parameters(
+                reasoning_effort=model.reasoning_effort,
+            ),
             stream=True,
             context_size=self.get_context_size(model_id),
             runtime=self._runtime,
@@ -171,5 +186,6 @@ PROVIDER_OPENAI_CODEX = CodexSubscriptionProvider(
         "provider_kind": "cloud_subscription",
         "auth_kind": "chatgpt_subscription",
         "runtime_kind": "codex_app_server",
+        "experimental": True,
     },
 )

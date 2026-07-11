@@ -1,8 +1,12 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=protected-access
 from __future__ import annotations
 
 import os
+from dataclasses import replace
 from pathlib import Path
 import sys
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -10,6 +14,9 @@ from qwenpaw.providers.codex_subscription.errors import CodexSubscriptionError
 from qwenpaw.providers.codex_subscription.runtime import (
     CodexAppServerRuntime,
     RuntimeState,
+)
+from qwenpaw.providers.codex_subscription.schema_capabilities import (
+    CodexCapabilities,
 )
 from qwenpaw.providers.codex_subscription.settings import (
     CodexSubscriptionSettings,
@@ -38,8 +45,24 @@ async def test_runtime_initializes_and_stops():
     await runtime.start()
     assert runtime.state is RuntimeState.READY
     assert runtime.initialize_result["platformOs"] == "linux"
+    assert "item/tool/call" in runtime.rpc._server_handlers
     await runtime.stop()
     assert runtime.state is RuntimeState.STOPPED
+
+
+async def test_runtime_rejects_missing_turn_sandbox_before_spawn():
+    capabilities = replace(
+        CodexCapabilities.focused_contract(),
+        turn_sandbox_policy=False,
+    )
+    runtime = CodexAppServerRuntime(
+        command=(sys.executable, "must-not-spawn"),
+        capabilities=capabilities,
+    )
+    with pytest.raises(CodexSubscriptionError) as caught:
+        await runtime.start()
+    assert caught.value.error_code == "CODEX_SANDBOX_UNSUPPORTED"
+    assert runtime.state is RuntimeState.INCOMPATIBLE
 
 
 async def test_runtime_rejects_requests_before_initialize():
@@ -47,6 +70,29 @@ async def test_runtime_rejects_requests_before_initialize():
     with pytest.raises(CodexSubscriptionError) as caught:
         await runtime.request("model/list", {})
     assert caught.value.error_code == "CODEX_NOT_INITIALIZED"
+
+
+async def test_runtime_lists_only_mcp_server_names_and_caches_them():
+    runtime = CodexAppServerRuntime(command=(sys.executable, "unused"))
+    runtime._state = RuntimeState.READY
+    runtime.request = AsyncMock(
+        side_effect=[
+            {
+                "data": [
+                    {"name": "zeta", "tools": {"secret": "discarded"}},
+                ],
+                "nextCursor": "next",
+            },
+            {
+                "data": [{"name": "alpha", "resources": ["discarded"]}],
+                "nextCursor": None,
+            },
+        ],
+    )
+
+    assert await runtime.list_mcp_server_names() == ("alpha", "zeta")
+    assert await runtime.list_mcp_server_names() == ("alpha", "zeta")
+    assert runtime.request.await_count == 2
 
 
 async def test_runtime_start_failure_has_stable_error(tmp_path: Path):

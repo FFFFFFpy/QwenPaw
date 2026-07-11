@@ -33,8 +33,11 @@ the authorization code and does not receive or store OAuth tokens.
 
 On macOS, the official App Server may ask permission to read its own login
 record from Keychain. Merely listing QwenPaw providers does not perform an
-account read; it happens only after an explicit account check, login, model
-refresh, or model call.
+account read or start the Runtime; the card initially shows an unknown account
+state, never **Live**. Credential access happens only after an explicit account
+check, login completion, model refresh, or model call. Denying a platform
+credential prompt results in a visible account/model error; QwenPaw does not
+require approval merely to list providers.
 
 For a headless machine or a blocked local callback, select **Use device code**.
 Open the displayed verification URL, enter the one-time code, and leave the
@@ -47,6 +50,9 @@ The model list comes from the connected account's `model/list` response. It is
 not a static list maintained by QwenPaw. Select **Refresh** after changing
 accounts or plans, then choose one of the discovered models as the active LLM.
 Image support and reasoning-effort options are taken from the same catalog.
+The effective reasoning effort is selected in this order: per-call override,
+saved model setting, current catalog default, then no explicit value. Values
+outside the model's advertised options are rejected before `thread/start`.
 
 If a previously selected model disappears, QwenPaw reports it as unavailable
 instead of silently substituting another model.
@@ -66,14 +72,17 @@ to the same Codex turn. If dynamic tools are unavailable or disabled, a chat
 that supplies tools fails clearly; tools are never silently discarded.
 
 Codex built-in command, file-change, web, MCP, and other side-effect paths are
-not authorized. Turns use an isolated temporary working directory, read-only
-sandboxing, no approval escalation, and event-level blocking.
+not authorized. Compatible App Server versions must support a structured
+read-only policy that restricts readable roots to QwenPaw's isolated temporary
+directory and disables network access. QwenPaw refuses to start a real turn if
+that boundary is unavailable. Approval-request rejection and event-level
+blocking remain secondary safeguards.
 
 ## Troubleshooting
 
 - **Not installed:** verify `codex --version`, or set the absolute binary path.
 - **Incompatible:** update the official Codex CLI; QwenPaw detected a missing
-  required App Server protocol method.
+  required protocol method or restricted readable-root sandbox capability.
 - **Login expired:** start a new browser or device-code login session.
 - **No models:** confirm the card says connected, then refresh. Availability is
   determined by the current ChatGPT account and workspace.
@@ -82,6 +91,8 @@ sandboxing, no approval escalation, and event-level blocking.
 - **Runtime crashed:** select **Detect again**. Active turns fail safely and are
   not replayed.
 - **Tool bridge unsupported:** update Codex or disable tools for that agent.
+- **Request too large:** reduce history, image count/size, or tool schema size.
+  QwenPaw checks the complete compact JSON payload before starting the turn.
 
 ## Sign out, disable, and uninstall
 

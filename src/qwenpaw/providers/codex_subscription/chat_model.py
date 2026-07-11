@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
 """AgentScope ChatModel adapter for Codex App Server turns."""
+
+# pylint: disable=consider-using-with,too-many-branches,too-many-statements
 
 from __future__ import annotations
 
@@ -30,15 +33,23 @@ from pydantic import BaseModel
 from .auth_service import AuthService
 from .errors import CodexSubscriptionError
 from .message_mapper import MessageMapper
+from .payload_budget import TurnPayloadBudget
 from .runtime import CodexAppServerRuntime, RuntimeState
+from .schema_capabilities import build_restricted_sandbox_policy
+from .tool_isolation import build_tool_isolation_config
 from .tool_bridge import format_dynamic_tools
-from .turn_bridge import TurnBridge
+from .turn_bridge import CleanupState, TurnBridge
 
 logger = logging.getLogger(__name__)
 
 _BLOCKED_ITEM_TYPES = {
+    "browserUse",
+    "collabAgentToolCall",
     "commandExecution",
+    "computerUse",
     "fileChange",
+    "imageView",
+    "imageGeneration",
     "mcpToolCall",
     "webSearch",
 }
@@ -74,9 +85,20 @@ class CodexSubscriptionChatModel(ChatModelBase):
         self.runtime = runtime
         self.auth_service = auth_service or AuthService(runtime)
         self.relay_reasoning = relay_reasoning
-        self.message_mapper = message_mapper or MessageMapper()
+        attachment_limit = int(
+            getattr(runtime.settings, "max_attachment_bytes", 8 * 1024 * 1024),
+        )
+        raw_image_limit = min(
+            attachment_limit,
+            int(runtime.settings.max_message_bytes * 0.60),
+        )
+        self.message_mapper = message_mapper or MessageMapper(
+            max_image_bytes=raw_image_limit,
+        )
         self._active_turn: TurnBridge | None = None
         self._starting_turn = False
+        self._cleanup_bridge: TurnBridge | None = None
+        self._cleanup_barrier: asyncio.Task[None] | None = None
         super().__init__(
             credential=credential,
             model=model,
@@ -118,6 +140,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
         tool_choice: Any | None = None,
         **generate_kwargs: Any,
     ) -> ChatResponse | AsyncGenerator[ChatResponse, None]:
+        await self._await_cleanup_barrier()
         if self._active_turn is not None:
             bridge = self._active_turn
             tool_bridge = bridge.tool_bridge
@@ -128,15 +151,17 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 )
             if tool_bridge.terminal_error:
                 error = tool_bridge.terminal_error
-                await bridge.cleanup(interrupt=True)
+                task = self._track_cleanup(bridge, interrupt=True)
                 self._active_turn = None
+                await asyncio.shield(task)
                 raise error
             results = _extract_tool_results(messages)
             try:
                 tool_bridge.submit_results(results)
             except Exception:
-                await bridge.cleanup(interrupt=True)
+                task = self._track_cleanup(bridge, interrupt=True)
                 self._active_turn = None
+                await asyncio.shield(task)
                 raise
             stream = self._consume_turn(bridge, model_name)
             return await self._maybe_collect(stream)
@@ -191,11 +216,27 @@ class CodexSubscriptionChatModel(ChatModelBase):
         try:
             if self.runtime.state is not RuntimeState.READY:
                 await self.runtime.start()
+            capabilities = self.runtime.capabilities
+            if capabilities is None:
+                raise CodexSubscriptionError(
+                    "CODEX_PROTOCOL_INCOMPATIBLE",
+                    "Codex capabilities are unavailable",
+                )
+            if not capabilities.tool_isolation_verified:
+                raise CodexSubscriptionError(
+                    "CODEX_TOOL_ISOLATION_UNVERIFIED",
+                    "This Codex version has not passed the QwenPaw built-in "
+                    "tool isolation probe",
+                    remediation=(
+                        "Run the explicit account-backed tool isolation probe "
+                        "before enabling real Codex chats."
+                    ),
+                )
             if dynamic_tools:
                 disabled = os.getenv(
-                    "QWENPAW_CODEX_DYNAMIC_TOOLS", "auto"
+                    "QWENPAW_CODEX_DYNAMIC_TOOLS",
+                    "auto",
                 ).lower()
-                capabilities = self.runtime.capabilities
                 if (
                     disabled in {"0", "false", "no", "off"}
                     or capabilities is None
@@ -246,6 +287,13 @@ class CodexSubscriptionChatModel(ChatModelBase):
                         "input",
                     )
 
+            effort = _resolve_reasoning_effort(
+                generate_kwargs,
+                getattr(self.parameters, "reasoning_effort", None),
+                model_row,
+            )
+            mcp_server_names = await self.runtime.list_mcp_server_names()
+
             thread_params: dict[str, Any] = {
                 "model": model_name,
                 "cwd": temporary.name,
@@ -256,9 +304,34 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 "developerInstructions": (
                     _DEVELOPER_INSTRUCTIONS + tool_instruction
                 ),
+                "config": build_tool_isolation_config(
+                    mcp_server_names=mcp_server_names,
+                ),
             }
+            if capabilities.runtime_workspace_roots:
+                thread_params["runtimeWorkspaceRoots"] = [temporary.name]
+            thread_params["environments"] = []
             if dynamic_tools:
                 thread_params["dynamicTools"] = dynamic_tools
+            turn_template: dict[str, Any] = {
+                "input": turn_input,
+                "sandboxPolicy": build_restricted_sandbox_policy(
+                    capabilities,
+                ),
+            }
+            if effort is not None:
+                turn_template["effort"] = effort
+            attachment_count = sum(
+                item.get("type") == "image" for item in turn_input
+            )
+            payload_budget = TurnPayloadBudget(
+                self.runtime.settings.max_message_bytes,
+            )
+            payload_budget.validate_rpc_request(
+                "thread/start",
+                thread_params,
+                attachment_count=attachment_count,
+            )
             thread_response = await self.runtime.request(
                 "thread/start",
                 thread_params,
@@ -282,38 +355,48 @@ class CodexSubscriptionChatModel(ChatModelBase):
                 ),
             )
 
-            effort = generate_kwargs.get("reasoning_effort")
-            if not isinstance(effort, str):
-                effort = getattr(self.parameters, "reasoning_effort", None)
-            turn_params: dict[str, Any] = {
-                "threadId": thread_id,
-                "input": turn_input,
-            }
-            if effort:
-                turn_params["effort"] = effort
-            turn_response = await self.runtime.request(
-                "turn/start", turn_params
-            )
-            turn = turn_response.get("turn")
-            turn_id = turn.get("id") if isinstance(turn, dict) else None
-            if not isinstance(turn_id, str) or not turn_id:
-                raise CodexSubscriptionError(
-                    "CODEX_PROTOCOL_INCOMPATIBLE",
-                    "Codex did not return a turn identifier",
-                )
-            bridge.turn_id = turn_id
             if dynamic_tools:
                 names = {str(tool["name"]) for tool in dynamic_tools}
                 active_bridge = bridge
 
                 def on_tool_timeout() -> None:
-                    asyncio.create_task(self._tool_timeout(active_bridge))
+                    self._track_cleanup(active_bridge, interrupt=True)
+                    if self._active_turn is active_bridge:
+                        self._active_turn = None
 
                 bridge.enable_tools(
                     names,
                     self.runtime.settings.tool_wait_timeout_seconds,
                     on_tool_timeout,
                 )
+
+            turn_params: dict[str, Any] = {
+                "threadId": thread_id,
+                **turn_template,
+            }
+            payload_budget.validate_rpc_request(
+                "turn/start",
+                turn_params,
+                attachment_count=attachment_count,
+            )
+            try:
+                turn_response = await self.runtime.request(
+                    "turn/start",
+                    turn_params,
+                )
+            except CodexSubscriptionError as exc:
+                bridge.fail_turn_start(exc)
+                raise
+            turn = turn_response.get("turn")
+            turn_id = turn.get("id") if isinstance(turn, dict) else None
+            if not isinstance(turn_id, str) or not turn_id:
+                error = CodexSubscriptionError(
+                    "CODEX_PROTOCOL_INCOMPATIBLE",
+                    "Codex did not return a turn identifier",
+                )
+                bridge.fail_turn_start(error)
+                raise error
+            bridge.bind_turn(turn_id)
             self._active_turn = bridge
             logger.info(
                 "Codex turn started generation=%s model=%s thread=%s "
@@ -329,7 +412,8 @@ class CodexSubscriptionChatModel(ChatModelBase):
         finally:
             self._starting_turn = False
             if bridge is not None and self._active_turn is not bridge:
-                await bridge.cleanup(interrupt=True)
+                task = self._track_cleanup(bridge, interrupt=True)
+                await asyncio.shield(task)
             elif bridge is None and self._active_turn is None:
                 temporary.cleanup()
 
@@ -371,18 +455,19 @@ class CodexSubscriptionChatModel(ChatModelBase):
                     ] = [bridge.tool_bridge.make_tool_call_block(params)]
                     await asyncio.sleep(0)
                     while not bridge.queue.empty():
-                        queued_method, queued_params = (
-                            bridge.queue.get_nowait()
-                        )
+                        (
+                            queued_method,
+                            queued_params,
+                        ) = bridge.queue.get_nowait()
                         if queued_method == "dynamic_tool_call":
                             blocks.append(
                                 bridge.tool_bridge.make_tool_call_block(
-                                    queued_params
-                                )
+                                    queued_params,
+                                ),
                             )
                         else:
                             bridge.backlog.append(
-                                (queued_method, queued_params)
+                                (queued_method, queued_params),
                             )
                     yield ChatResponse(
                         content=blocks,
@@ -411,7 +496,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                                 TextBlock(
                                     text=delta,
                                     id=str(
-                                        params.get("itemId") or "codex-text"
+                                        params.get("itemId") or "codex-text",
                                     ),
                                 ),
                             ],
@@ -430,7 +515,7 @@ class CodexSubscriptionChatModel(ChatModelBase):
                                     thinking=delta,
                                     id=str(
                                         params.get("itemId")
-                                        or "codex-reasoning"
+                                        or "codex-reasoning",
                                     ),
                                 ),
                             ],
@@ -500,19 +585,100 @@ class CodexSubscriptionChatModel(ChatModelBase):
             if not keep_active:
                 current = asyncio.current_task()
                 cancelling = bool(current and current.cancelling())
-                if cancelling:
-                    asyncio.create_task(
-                        bridge.cleanup(interrupt=not completed),
-                    )
-                else:
-                    await bridge.cleanup(interrupt=not completed)
+                task = self._track_cleanup(
+                    bridge,
+                    interrupt=not completed,
+                )
                 if self._active_turn is bridge:
                     self._active_turn = None
+                if not cancelling:
+                    await asyncio.shield(task)
 
-    async def _tool_timeout(self, bridge: TurnBridge) -> None:
-        await bridge.cleanup(interrupt=True)
-        if self._active_turn is bridge:
-            self._active_turn = None
+    def _track_cleanup(
+        self,
+        bridge: TurnBridge,
+        *,
+        interrupt: bool,
+        retry: bool = False,
+    ) -> asyncio.Task[None]:
+        task = bridge.start_cleanup(interrupt=interrupt, retry=retry)
+        self._cleanup_bridge = bridge
+        self._cleanup_barrier = task
+        return task
+
+    async def _await_cleanup_barrier(self) -> None:
+        task = self._cleanup_barrier
+        if task is not None:
+            # A successful runtime restart is an explicit recovery boundary.
+            if (
+                task.done()
+                and self.runtime.turn_cleanup_error is None
+                and self._cleanup_bridge is not None
+                and self._cleanup_bridge.cleanup_state is CleanupState.FAILED
+            ):
+                self._cleanup_barrier = None
+                self._cleanup_bridge = None
+            else:
+                await asyncio.shield(task)
+                if self._cleanup_barrier is task:
+                    self._cleanup_barrier = None
+                    self._cleanup_bridge = None
+        self.runtime.assert_turn_start_allowed()
+
+    async def retry_cleanup(self) -> None:
+        """Explicitly retry a failed cleanup before accepting a new turn."""
+
+        bridge = self._cleanup_bridge
+        if bridge is None:
+            self.runtime.assert_turn_start_allowed()
+            return
+        task = self._track_cleanup(
+            bridge,
+            interrupt=True,
+            retry=True,
+        )
+        await asyncio.shield(task)
+        if self._cleanup_barrier is task:
+            self._cleanup_barrier = None
+            self._cleanup_bridge = None
+
+
+def _resolve_reasoning_effort(
+    generate_kwargs: dict[str, Any],
+    saved_effort: str | None,
+    model_row: dict[str, Any],
+) -> str | None:
+    if "reasoning_effort" in generate_kwargs:
+        effort = generate_kwargs["reasoning_effort"]
+    elif saved_effort is not None:
+        effort = saved_effort
+    else:
+        effort = model_row.get("defaultReasoningEffort")
+
+    if effort is None:
+        return None
+    if not isinstance(effort, str) or not effort.strip():
+        raise CodexSubscriptionError(
+            "CODEX_REASONING_EFFORT_UNSUPPORTED",
+            "The requested Codex reasoning effort is invalid",
+        )
+    effort = effort.strip()
+    supported: list[str] = []
+    options = model_row.get("supportedReasoningEfforts")
+    if isinstance(options, list):
+        for option in options:
+            if not isinstance(option, dict):
+                continue
+            value = option.get("reasoningEffort")
+            if isinstance(value, str) and value not in supported:
+                supported.append(value)
+    if supported and effort not in supported:
+        raise CodexSubscriptionError(
+            "CODEX_REASONING_EFFORT_UNSUPPORTED",
+            "The requested reasoning effort is unavailable for this model",
+            details={"supported_efforts": supported},
+        )
+    return effort
 
 
 def _extract_tool_results(messages: list[Msg]) -> list[ToolResultBlock]:

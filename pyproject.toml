@@ -155,6 +155,7 @@ markers = [
     "contract: marks tests as contract tests",
     "integration: marks tests as integration tests",
     "e2e: marks tests as end-to-end tests",
+    "codex_smoke: opt-in test against a real Codex App Server binary",
 ]
 testpaths = [
     "tests",

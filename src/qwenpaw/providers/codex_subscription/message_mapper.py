@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Deterministic AgentScope-message to Codex turn-input mapping."""
 
 from __future__ import annotations
@@ -22,7 +23,7 @@ from .errors import CodexSubscriptionError
 
 
 class MessageMapper:
-    def __init__(self, *, max_image_bytes: int = 8 * 1024 * 1024) -> None:
+    def __init__(self, *, max_image_bytes: int | None = None) -> None:
         self.max_image_bytes = max_image_bytes
 
     def map_messages(self, messages: list[Msg]) -> list[dict[str, Any]]:
@@ -40,22 +41,20 @@ class MessageMapper:
                     # Hidden/reasoning content is never replayed to the model.
                     continue
                 elif isinstance(block, ToolCallBlock):
+                    call_id = html.escape(block.id, quote=True)
+                    tool_name = html.escape(block.name, quote=True)
+                    tool_input = _escape(block.input)
                     lines.append(
-                        '<tool-call id="{}" name="{}">{}</tool-call>'.format(
-                            html.escape(block.id, quote=True),
-                            html.escape(block.name, quote=True),
-                            _escape(block.input),
-                        ),
+                        f'<tool-call id="{call_id}" name="{tool_name}">'
+                        f"{tool_input}</tool-call>",
                     )
                 elif isinstance(block, ToolResultBlock):
+                    call_id = html.escape(block.id, quote=True)
+                    tool_name = html.escape(block.name, quote=True)
+                    tool_output = _escape(_tool_result_text(block))
                     lines.append(
-                        (
-                            '<tool-result id="{}" name="{}">{}</tool-result>'
-                        ).format(
-                            html.escape(block.id, quote=True),
-                            html.escape(block.name, quote=True),
-                            _escape(_tool_result_text(block)),
-                        ),
+                        f'<tool-result id="{call_id}" name="{tool_name}">'
+                        f"{tool_output}</tool-result>",
                     )
                 elif isinstance(block, DataBlock):
                     image_index += 1
@@ -81,10 +80,18 @@ class MessageMapper:
             )
         if isinstance(source, Base64Source):
             estimated_size = len(source.data.rstrip("=")) * 3 // 4
-            if estimated_size > self.max_image_bytes:
+            if (
+                self.max_image_bytes is not None
+                and estimated_size > self.max_image_bytes
+            ):
                 raise CodexSubscriptionError(
-                    "CODEX_CONTEXT_WINDOW_EXCEEDED",
+                    "CODEX_ATTACHMENT_TOO_LARGE",
                     "The image attachment is too large for Codex",
+                    details={
+                        "payload_bytes": estimated_size,
+                        "limit_bytes": self.max_image_bytes,
+                        "attachment_count": 1,
+                    },
                 )
             return {
                 "type": "image",
@@ -98,10 +105,20 @@ class MessageMapper:
                     "CODEX_BUILTIN_SIDE_EFFECT_BLOCKED",
                     "Local paths are not accepted as Codex image inputs",
                 )
-            if parsed.scheme == "data" and len(url) > self.max_image_bytes * 2:
+            encoded_size = len(url.encode("utf-8"))
+            if (
+                parsed.scheme == "data"
+                and self.max_image_bytes is not None
+                and encoded_size > self.max_image_bytes
+            ):
                 raise CodexSubscriptionError(
-                    "CODEX_CONTEXT_WINDOW_EXCEEDED",
+                    "CODEX_ATTACHMENT_TOO_LARGE",
                     "The image attachment is too large for Codex",
+                    details={
+                        "payload_bytes": encoded_size,
+                        "limit_bytes": self.max_image_bytes,
+                        "attachment_count": 1,
+                    },
                 )
             return {"type": "image", "url": url}
         raise CodexSubscriptionError(

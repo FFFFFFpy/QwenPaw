@@ -1,4 +1,7 @@
+# -*- coding: utf-8 -*-
 """Concurrent bidirectional JSON-RPC-over-JSONL client."""
+
+# pylint: disable=too-many-branches,try-except-raise
 
 from __future__ import annotations
 
@@ -23,6 +26,12 @@ ServerRequestHandler = Callable[
     dict[str, Any] | Awaitable[dict[str, Any]],
 ]
 Unsubscribe = Callable[[], None]
+
+
+def encode_json_message(message: dict[str, Any]) -> bytes:
+    """Encode one protocol object exactly as it appears on the wire."""
+
+    return json.dumps(message, separators=(",", ":")).encode("utf-8")
 
 
 class JsonRpcClient:
@@ -146,7 +155,7 @@ class JsonRpcClient:
     async def _write(self, message: dict[str, Any]) -> None:
         if self._closed_error is not None:
             raise self._closed_error
-        encoded = json.dumps(message, separators=(",", ":")).encode("utf-8")
+        encoded = encode_json_message(message)
         if len(encoded) > self._max_message_bytes:
             raise CodexProtocolError("Codex JSON-RPC message is too large")
         async with self._write_lock:
@@ -194,7 +203,7 @@ class JsonRpcClient:
             future = self._pending.get(message["id"])
             if future is None or future.done():
                 logger.debug(
-                    "Ignoring duplicate or unknown Codex RPC response"
+                    "Ignoring duplicate or unknown Codex RPC response",
                 )
                 return
             if "error" in message:
