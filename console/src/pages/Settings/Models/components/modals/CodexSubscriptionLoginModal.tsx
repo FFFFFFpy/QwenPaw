@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Button, Input, Modal } from "@agentscope-ai/design";
-import { Check, ExternalLink, Loader2 } from "lucide-react";
+import { Check, CircleX, ExternalLink, Loader2 } from "lucide-react";
 import { codexSubscriptionApi } from "../../../../../api/modules/codexSubscription";
 import { openExternalLink } from "../../../../../utils/openExternalLink";
 import { useAppMessage } from "../../../../../hooks/useAppMessage";
@@ -25,19 +25,68 @@ export function CodexSubscriptionLoginModal({
   >("starting");
   const [error, setError] = useState("");
   const timer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const activeRef = useRef(false);
+  const runRef = useRef(0);
+  const abortRef = useRef<AbortController | null>(null);
+  const onConnectedRef = useRef(onConnected);
+  const successRef = useRef(message.success);
+  onConnectedRef.current = onConnected;
+  successRef.current = message.success;
 
-  const poll = useCallback(
-    (oauthState: string) => {
-      const run = async () => {
+  const deactivate = useCallback(() => {
+    activeRef.current = false;
+    runRef.current += 1;
+    abortRef.current?.abort();
+    abortRef.current = null;
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+  }, []);
+
+  const isCurrentRun = useCallback(
+    (run: number) => activeRef.current && runRef.current === run,
+    [],
+  );
+
+  const handleClose = useCallback(() => {
+    deactivate();
+    onClose();
+  }, [deactivate, onClose]);
+
+  useEffect(() => {
+    if (!open) {
+      deactivate();
+      return;
+    }
+
+    activeRef.current = true;
+    runRef.current += 1;
+    const run = runRef.current;
+    const controller = new AbortController();
+    abortRef.current = controller;
+    setPhase("starting");
+    setError("");
+    setState("");
+    setCallbackUrl("");
+
+    const schedulePoll = (oauthState: string, delay: number) => {
+      if (!isCurrentRun(run)) return;
+      timer.current = setTimeout(async () => {
+        if (!isCurrentRun(run)) return;
         try {
-          const result = await codexSubscriptionApi.getLoginStatus(oauthState);
+          const result = await codexSubscriptionApi.getLoginStatus(
+            oauthState,
+            controller.signal,
+          );
+          if (!isCurrentRun(run)) return;
           if (result.status === "completed") {
+            timer.current = null;
             setPhase("connected");
-            message.success("ChatGPT 登录成功");
-            onConnected();
+            successRef.current("ChatGPT 登录成功");
+            onConnectedRef.current();
             return;
           }
           if (result.status === "failed" || result.status === "expired") {
+            timer.current = null;
             setPhase("failed");
             setError(
               result.error ||
@@ -47,24 +96,20 @@ export function CodexSubscriptionLoginModal({
             );
             return;
           }
-        } catch {
-          /* keep the active OAuth session */
+        } catch (reason) {
+          if (!isCurrentRun(run)) return;
+          if (reason instanceof DOMException && reason.name === "AbortError") {
+            return;
+          }
         }
-        timer.current = setTimeout(run, 1500);
-      };
-      timer.current = setTimeout(run, 1000);
-    },
-    [message, onConnected],
-  );
+        if (isCurrentRun(run)) schedulePoll(oauthState, 1500);
+      }, delay);
+    };
 
-  useEffect(() => {
-    if (!open) return;
-    setPhase("starting");
-    setError("");
-    setCallbackUrl("");
     void codexSubscriptionApi
-      .startLogin()
+      .startLogin(controller.signal)
       .then((login) => {
+        if (!isCurrentRun(run)) return;
         setState(login.state);
         setPhase("waiting");
         openExternalLink(
@@ -72,37 +117,58 @@ export function CodexSubscriptionLoginModal({
           "_blank",
           "popup,width=640,height=760",
         );
-        poll(login.state);
+        schedulePoll(login.state, 1000);
       })
       .catch((reason: unknown) => {
+        if (!isCurrentRun(run)) return;
+        if (reason instanceof DOMException && reason.name === "AbortError") {
+          return;
+        }
         setPhase("failed");
         setError(reason instanceof Error ? reason.message : "无法开始登录");
       });
-    return () => {
-      if (timer.current) clearTimeout(timer.current);
-    };
-  }, [open, poll]);
+
+    return deactivate;
+  }, [deactivate, isCurrentRun, open]);
 
   const completeManual = async () => {
+    if (!activeRef.current) return;
+    runRef.current += 1;
+    const run = runRef.current;
+    abortRef.current?.abort();
+    if (timer.current) clearTimeout(timer.current);
+    timer.current = null;
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
-      await codexSubscriptionApi.completeLogin({
-        callback_url: callbackUrl,
-        state,
-      });
+      await codexSubscriptionApi.completeLogin(
+        {
+          callback_url: callbackUrl,
+          state,
+        },
+        controller.signal,
+      );
+      if (!isCurrentRun(run)) return;
       setPhase("connected");
       message.success("ChatGPT 登录成功");
       onConnected();
     } catch (reason) {
+      if (!isCurrentRun(run)) return;
+      if (reason instanceof DOMException && reason.name === "AbortError") {
+        return;
+      }
       setPhase("failed");
       setError(reason instanceof Error ? reason.message : "无法完成登录");
     }
   };
 
   return (
-    <Modal open={open} onCancel={onClose} footer={null} width={520}>
+    <Modal open={open} onCancel={handleClose} footer={null} width={520}>
       <div style={{ padding: 16, textAlign: "center" }}>
         {phase === "connected" ? (
           <Check size={36} color="#22c55e" />
+        ) : phase === "failed" ? (
+          <CircleX size={36} color="#ef4444" />
         ) : (
           <Loader2 size={34} style={{ animation: "spin 1s linear infinite" }} />
         )}
@@ -129,7 +195,7 @@ export function CodexSubscriptionLoginModal({
             </Button>
             <Button
               icon={<ExternalLink size={15} />}
-              onClick={onClose}
+              onClick={handleClose}
               style={{ marginTop: 12, marginLeft: 8 }}
             >
               取消

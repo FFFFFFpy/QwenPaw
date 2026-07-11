@@ -13,21 +13,30 @@ const base = "/providers/openai-codex";
 
 export const codexSubscriptionApi = {
   getAccount: () => request<CodexAccountStatus>(`${base}/account`),
-  startLogin: () =>
-    request<CodexLoginStart>(`${base}/oauth/start`, { method: "POST" }),
-  completeLogin: (body: {
-    callback_url?: string;
-    code?: string;
-    state?: string;
-  }) =>
+  startLogin: (signal?: AbortSignal) =>
+    request<CodexLoginStart>(`${base}/oauth/start`, {
+      method: "POST",
+      ...(signal ? { signal } : {}),
+    }),
+  completeLogin: (
+    body: {
+      callback_url?: string;
+      code?: string;
+      state?: string;
+    },
+    signal?: AbortSignal,
+  ) =>
     request<CodexAccountStatus>(`${base}/oauth/complete`, {
       method: "POST",
       body: JSON.stringify(body),
+      ...(signal ? { signal } : {}),
     }),
-  getLoginStatus: (state: string) =>
-    request<CodexLoginStatus>(
-      `${base}/oauth/status?state=${encodeURIComponent(state)}`,
-    ),
+  getLoginStatus: (state: string, signal?: AbortSignal) => {
+    const path = `${base}/oauth/status?state=${encodeURIComponent(state)}`;
+    return signal
+      ? request<CodexLoginStatus>(path, { signal })
+      : request<CodexLoginStatus>(path);
+  },
   logout: () => request<void>(`${base}/logout`, { method: "POST" }),
   getRateLimits: () => request<CodexRateLimits>(`${base}/rate-limits`),
   getModels: () => request<CodexModelsRefresh>(`${base}/models`),
