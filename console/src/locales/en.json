@@ -1492,6 +1492,7 @@
     "codexSubscription": {
       "cloudSubscription": "Cloud Subscription",
       "experimental": "Experimental cloud subscription",
+      "setupTitle": "Configure {{name}}",
       "runtime": "Runtime",
       "runtimeStates": {
         "not_installed": "Not installed",
@@ -1515,6 +1516,7 @@
       "checkAccount": "Check account",
       "deviceCode": "Use device code",
       "redetect": "Detect again",
+      "detectCodex": "Detect Codex",
       "refresh": "Refresh",
       "signOut": "Sign out",
       "signOutConfirm": "Sign out of the Codex subscription on this device?",
@@ -1535,6 +1537,9 @@
       "openBrowser": "Open browser",
       "expiresIn": "Expires in {{seconds}} seconds",
       "connected": "ChatGPT connected",
+      "toolIsolationUnverified": "This Codex version has not passed tool-isolation verification. Account and model setup remain available, but model calls stay blocked.",
+      "modelsDiscovered": "{{count}} models discovered",
+      "completeSetup": "Complete setup",
       "installHint": "Install the official Codex CLI and ensure the codex executable is on PATH, or select its absolute path in Settings."
     },
     "providersTitle": "Providers",

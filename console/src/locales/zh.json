@@ -1351,6 +1351,7 @@
     "codexSubscription": {
       "cloudSubscription": "云订阅",
       "experimental": "实验性云订阅",
+      "setupTitle": "配置 {{name}}",
       "runtime": "运行时",
       "runtimeStates": {
         "not_installed": "未安装",
@@ -1374,6 +1375,7 @@
       "checkAccount": "检查账户",
       "deviceCode": "使用设备码",
       "redetect": "重新检测",
+      "detectCodex": "检测 Codex",
       "refresh": "刷新",
       "signOut": "退出登录",
       "signOutConfirm": "要在此设备退出 Codex 订阅账户吗？",
@@ -1394,6 +1396,9 @@
       "openBrowser": "打开浏览器",
       "expiresIn": "{{seconds}} 秒后过期",
       "connected": "ChatGPT 已连接",
+      "toolIsolationUnverified": "本机 Codex 版本尚未完成工具隔离验证；账户和模型仍可配置，实际调用将继续被阻止。",
+      "modelsDiscovered": "已发现 {{count}} 个模型",
+      "completeSetup": "完成配置",
       "installHint": "请安装官方 Codex CLI 并确保 codex 位于 PATH 中，或在设置中选择其绝对路径。"
     },
     "providersTitle": "提供商",

@@ -4,3 +4,4 @@ export * from "./ModelManageModal";
 export * from "./LocalModelManageModal";
 export * from "./RemoteModelManageModal";
 export * from "./CodexSubscriptionLoginModal";
+export * from "./SubscriptionProviderSetupModal";

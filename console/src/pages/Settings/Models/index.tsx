@@ -16,6 +16,7 @@ import {
   CustomProviderModal,
   ModelsSection,
   ProviderConfigModal,
+  SubscriptionProviderSetupModal,
   ModelManageModal,
 } from "./components";
 import { PageHeader } from "@/components/PageHeader";
@@ -43,6 +44,8 @@ function ModelsPage() {
   // Shared Modal state — only one instance each instead of N per card
   const [configModalProvider, setConfigModalProvider] =
     useState<ProviderInfo | null>(null);
+  const [subscriptionSetupProvider, setSubscriptionSetupProvider] =
+    useState<ProviderInfo | null>(null);
   const [modelsModalProvider, setModelsModalProvider] =
     useState<ProviderInfo | null>(null);
   const [variantSelectGroup, setVariantSelectGroup] = useState<{
@@ -62,7 +65,11 @@ function ModelsPage() {
     if (providerParam && providers.length > 0) {
       const target = providers.find((p) => p.id === providerParam);
       if (target) {
-        setConfigModalProvider(target);
+        if (target.meta?.provider_kind === "cloud_subscription") {
+          setSubscriptionSetupProvider(target);
+        } else {
+          setConfigModalProvider(target);
+        }
         setSearchParams({}, { replace: true });
       }
     }
@@ -96,9 +103,31 @@ function ModelsPage() {
     }
   }, [providers, configModalProvider]);
 
+  useEffect(() => {
+    if (subscriptionSetupProvider) {
+      const fresh = providers.find(
+        (p) => p.id === subscriptionSetupProvider.id,
+      );
+      if (fresh && fresh !== subscriptionSetupProvider) {
+        setSubscriptionSetupProvider(fresh);
+      }
+    }
+  }, [providers, subscriptionSetupProvider]);
+
   const handleOpenConfig = useCallback((provider: ProviderInfo) => {
     setConfigModalProvider(provider);
   }, []);
+
+  const handleConfigureAvailableProvider = useCallback(
+    (provider: ProviderInfo) => {
+      if (provider.meta?.provider_kind === "cloud_subscription") {
+        setSubscriptionSetupProvider(provider);
+        return;
+      }
+      setConfigModalProvider(provider);
+    },
+    [],
+  );
 
   const handleOpenModels = useCallback((provider: ProviderInfo) => {
     setModelsModalProvider(provider);
@@ -140,7 +169,7 @@ function ModelsPage() {
     >();
     const availUngrouped: ProviderInfo[] = [];
     for (const p of cloudAvail) {
-      if (p.provider_group) {
+      if (p.meta?.provider_kind !== "cloud_subscription" && p.provider_group) {
         const existing = availGroupMap.get(p.provider_group);
         if (existing) {
           existing.providers.push(p);
@@ -420,7 +449,9 @@ function ModelsPage() {
                               if (g.providers.length > 1) {
                                 setVariantSelectGroup(g);
                               } else {
-                                handleOpenConfig(g.firstProvider);
+                                handleConfigureAvailableProvider(
+                                  g.firstProvider,
+                                );
                               }
                             }}
                           >
@@ -472,7 +503,9 @@ function ModelsPage() {
                           <div
                             key={provider.id}
                             className={styles.availableItem}
-                            onClick={() => handleOpenConfig(provider)}
+                            onClick={() =>
+                              handleConfigureAvailableProvider(provider)
+                            }
                           >
                             <ProviderIcon providerId={provider.id} size={24} />
                             <span className={styles.availableItemName}>
@@ -524,6 +557,15 @@ function ModelsPage() {
                 onSaved={refreshProvidersSilently}
               />
             )}
+            {subscriptionSetupProvider && (
+              <SubscriptionProviderSetupModal
+                provider={subscriptionSetupProvider}
+                open={!!subscriptionSetupProvider}
+                onClose={() => setSubscriptionSetupProvider(null)}
+                onSaved={refreshProvidersSilently}
+                onOpenModels={handleOpenModels}
+              />
+            )}
             {modelsModalProvider && (
               <ModelManageModal
                 provider={modelsModalProvider}
@@ -550,7 +592,7 @@ function ModelsPage() {
                     className={styles.variantItem}
                     onClick={() => {
                       setVariantSelectGroup(null);
-                      handleOpenConfig(p);
+                      handleConfigureAvailableProvider(p);
                     }}
                   >
                     <ProviderIcon providerId={p.id} size={24} />
