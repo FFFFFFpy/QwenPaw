@@ -28,6 +28,8 @@ describe("GenericToolCard", () => {
     );
 
     const image = container.querySelector("img.ant-image-img");
+    const details = container.querySelector("details");
+    expect(details).toHaveAttribute("open");
     expect(image).not.toBeNull();
     expect(image).toHaveAttribute(
       "src",
@@ -35,5 +37,6 @@ describe("GenericToolCard", () => {
         "/files/preview/workspace/resources/generated.png",
       ),
     );
+    expect(container).not.toHaveTextContent("Output");
   });
 });

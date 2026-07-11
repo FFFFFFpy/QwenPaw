@@ -35,9 +35,12 @@ const GenericToolCard: React.FC<GenericToolCardProps> = ({
       title={t("tool.execute", { tool: toolLabel })}
       content={content}
       isStreaming={isStreaming}
+      defaultOpen={Boolean(media) && content.status === "done"}
     >
       {media && <MediaPreview media={media} />}
-      {resultText && <DefaultBlock title="Output" content={resultText} />}
+      {!media && resultText && (
+        <DefaultBlock title="Output" content={resultText} />
+      )}
     </ToolCardShell>
   );
 };

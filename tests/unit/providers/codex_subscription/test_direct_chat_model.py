@@ -22,7 +22,9 @@ from qwenpaw.providers.codex_subscription.token_store import (
 class FakeResponse:
     async def aiter_lines(self):
         for line in [
-            'data: {"type":"response.output_text.delta","delta":"PONG"}',
+            'data: {"type":"response.output_text.delta","delta":"PO"}',
+            "",
+            'data: {"type":"response.output_text.delta","delta":"NG"}',
             "",
             'data: {"type":"response.completed","response":'
             '{"usage":{"input_tokens":2,"output_tokens":1,'
@@ -92,8 +94,11 @@ async def test_direct_text_stream_has_no_thread_or_runtime(tmp_path):
         ]
     )
     chunks = [chunk async for chunk in response]
-    assert chunks[0].content[0].text == "PONG"
+    assert chunks[0].content[0].text == "PO"
+    assert chunks[1].content[0].text == "NG"
+    assert chunks[0].content[0].id == chunks[1].content[0].id
     assert chunks[-1].is_last
+    assert len(chunks[-1].content) == 1
     assert chunks[-1].content[0].text == "PONG"
     assert chunks[-1].usage.input_tokens == 2
     assert http.calls == 1
@@ -178,7 +183,7 @@ async def test_401_refreshes_and_retries_only_once_before_output(tmp_path):
         [UserMsg(name="user", content=[TextBlock(text="ping")])]
     )
     chunks = [chunk async for chunk in response]
-    assert chunks[0].content[0].text == "PONG"
+    assert chunks[0].content[0].text == "PO"
     assert oauth.calls == 1
     assert http.calls == 2
 

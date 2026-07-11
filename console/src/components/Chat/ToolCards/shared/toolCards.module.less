@@ -7,6 +7,9 @@
   margin: 2px 0;
   display: block;
   width: 100%;
+  min-width: 0;
+  max-width: 100%;
+  box-sizing: border-box;
 
   &.toolCallCompactLoading {
     .toolCallLabel {
@@ -146,13 +149,27 @@
 // Media preview
 .toolCallMediaPreview {
   margin: 6px 0 4px 18px;
+  width: min(256px, calc(100% - 18px));
+  max-width: calc(100% - 18px);
+  min-width: 0;
 }
 
 .toolCallImage {
-  max-width: 256px;
+  display: block;
+  width: 256px;
+  max-width: 100%;
+  min-width: 0;
   border-radius: 8px;
   overflow: hidden;
   border: 1px solid var(--ant-color-border-secondary, rgba(0, 0, 0, 0.06));
+
+  :global(.ant-image),
+  :global(.ant-image-img) {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+    height: auto;
+  }
 }
 
 // Bubble media (reused by MediaPreview)

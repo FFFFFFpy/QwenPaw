@@ -6,6 +6,7 @@ import asyncio
 from collections.abc import AsyncGenerator
 import time
 from typing import Any, Callable
+from uuid import uuid4
 
 import httpx
 from agentscope.credential import CredentialBase
@@ -113,6 +114,11 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
         self, body: dict[str, Any]
     ) -> AsyncGenerator[ChatResponse, None]:
         started = time.monotonic()
+        # AgentScope uses block IDs to decide whether a streamed delta extends
+        # an existing block.  Reusing one ID per content kind keeps a sentence
+        # as one message instead of rendering every token as a separate row.
+        text_block_id = f"codex-text-{uuid4().hex}"
+        reasoning_block_id = f"codex-reasoning-{uuid4().hex}"
         refreshed_after_401 = False
         while True:
             record = await self.token_store.get_valid(
@@ -146,7 +152,12 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                             elif part.kind == "text" and part.text:
                                 emitted_any = True
                                 chunk = ChatResponse(
-                                    content=[TextBlock(text=part.text)],
+                                    content=[
+                                        TextBlock(
+                                            id=text_block_id,
+                                            text=part.text,
+                                        )
+                                    ],
                                     is_last=False,
                                 )
                                 accumulated.append_chat_response(chunk)
@@ -159,7 +170,10 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                 emitted_any = True
                                 chunk = ChatResponse(
                                     content=[
-                                        ThinkingBlock(thinking=part.text)
+                                        ThinkingBlock(
+                                            id=reasoning_block_id,
+                                            thinking=part.text,
+                                        )
                                     ],
                                     is_last=False,
                                 )
