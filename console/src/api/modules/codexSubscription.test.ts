@@ -37,4 +37,14 @@ describe("codexSubscriptionApi", () => {
     });
     expect(JSON.stringify(body).toLowerCase()).not.toContain("token");
   });
+
+  it("updates one chat model without generic request kwargs", async () => {
+    const body = { reasoning_effort: "high", relay_reasoning: true };
+    await codexSubscriptionApi.updateChatModelSettings("gpt-5.6/luna", body);
+    expect(request).toHaveBeenCalledWith(
+      "/providers/openai-codex/models/gpt-5.6%2Fluna/settings",
+      { method: "PUT", body: JSON.stringify(body) },
+    );
+    expect(JSON.stringify(body)).not.toContain("max_tokens");
+  });
 });

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from pathlib import Path
 from typing import Any
 
 from agentscope.model import ChatModelBase
@@ -21,6 +22,8 @@ class ChatGPTSubscriptionProvider(Provider):
     _token_store: TokenStore = PrivateAttr()
     _oauth: OAuthService = PrivateAttr()
     _settings: CodexSubscriptionSettings = PrivateAttr()
+    _availability: dict[str, str] = PrivateAttr(default_factory=dict)
+    _settings_path: Path = PrivateAttr()
 
     def model_post_init(self, __context: Any) -> None:
         del __context
@@ -28,9 +31,19 @@ class ChatGPTSubscriptionProvider(Provider):
         self.base_url = "https://chatgpt.com/backend-api/codex"
         self._token_store = TokenStore()
         self._oauth = OAuthService(self._token_store)
-        self._settings = CodexSubscriptionSettings.load(
+        self._settings_path = (
             SECRET_DIR / "codex_subscription" / "settings.json"
         )
+        self._settings = CodexSubscriptionSettings.load(self._settings_path)
+        self._availability = {
+            model_id: "unknown"
+            for model_id in (
+                "gpt-5.6-sol",
+                "gpt-5.6-terra",
+                "gpt-5.6-luna",
+                "gpt-image-2",
+            )
+        }
         saved = {model.id: model for model in self.models}
         self.models = subscription_models()
         for model in self.models:
@@ -52,6 +65,16 @@ class ChatGPTSubscriptionProvider(Provider):
     def settings(self) -> CodexSubscriptionSettings:
         return self._settings
 
+    def availability(self, model_id: str) -> str:
+        return self._availability.get(model_id, "unknown")
+
+    def record_availability(self, model_id: str, value: str) -> None:
+        if value in {"available", "unavailable"}:
+            self._availability[model_id] = value
+
+    def save_settings(self) -> None:
+        self._settings.save(self._settings_path)
+
     async def check_connection(self, timeout: float = 5) -> tuple[bool, str]:
         del timeout
         if not direct_transport_enabled():
@@ -64,11 +87,6 @@ class ChatGPTSubscriptionProvider(Provider):
 
     async def fetch_models(self, timeout: float = 5) -> list[ModelInfo]:
         del timeout
-        if not self._token_store.status()["connected"]:
-            raise CodexSubscriptionError(
-                "CODEX_NOT_LOGGED_IN",
-                "Sign in to ChatGPT before refreshing models",
-            )
         return [model.model_copy(deep=True) for model in self.models]
 
     async def check_model_connection(
@@ -116,11 +134,11 @@ class ChatGPTSubscriptionProvider(Provider):
             "transport": "direct",
             "compatibility_route": True,
             "account": self._token_store.status(),
-            "model_source": "subscription_catalog",
+            "model_source": "bundled_compatibility_catalog",
             "context_size": 262144,
             "compact_threshold": 0.90,
             "compact_trigger": 235930,
-            "max_output_tokens": 131072,
+            "catalog_max_output_tokens": 128000,
             "direct_enabled": direct_transport_enabled(),
         }
         return ProviderInfo.model_validate(data)
@@ -140,7 +158,8 @@ class ChatGPTSubscriptionProvider(Provider):
                 "CODEX_MODEL_UNAVAILABLE",
                 f"Subscription model '{model_id}' is not available",
             )
-        effort = model.reasoning_effort or self._settings.reasoning_effort
+        model_settings = self._settings.chat_model(model_id)
+        effort = model_settings.reasoning_effort
         if effort and effort not in (model.reasoning_effort_options or []):
             raise CodexSubscriptionError(
                 "CODEX_REASONING_CONFIRMATION_REQUIRED",
@@ -157,8 +176,8 @@ class ChatGPTSubscriptionProvider(Provider):
             ),
             token_store=self._token_store,
             oauth_service=self._oauth,
-            relay_reasoning=model.relay_reasoning
-            and self._settings.relay_reasoning,
+            relay_reasoning=model_settings.relay_reasoning,
+            availability_callback=self.record_availability,
             stream=True,
             context_size=262_144,
         )

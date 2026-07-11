@@ -1,6 +1,8 @@
 import { request } from "../request";
 import type {
   CodexAccountStatus,
+  CodexChatModelSettings,
+  CodexImageModelSettings,
   CodexLoginStart,
   CodexLoginStatus,
   CodexModelsRefresh,
@@ -37,6 +39,24 @@ export const codexSubscriptionApi = {
     request<{ valid: boolean; message: string }>(`${base}/validate`, {
       method: "POST",
     }),
+  getChatModelSettings: (modelId: string) =>
+    request<CodexChatModelSettings>(
+      `${base}/models/${encodeURIComponent(modelId)}/settings`,
+    ),
+  updateChatModelSettings: (modelId: string, body: CodexChatModelSettings) =>
+    request<CodexChatModelSettings>(
+      `${base}/models/${encodeURIComponent(modelId)}/settings`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
+  getImageModelSettings: (modelId: string) =>
+    request<CodexImageModelSettings>(
+      `${base}/image-models/${encodeURIComponent(modelId)}/settings`,
+    ),
+  updateImageModelSettings: (modelId: string, body: CodexImageModelSettings) =>
+    request<CodexImageModelSettings>(
+      `${base}/image-models/${encodeURIComponent(modelId)}/settings`,
+      { method: "PUT", body: JSON.stringify(body) },
+    ),
   getSettings: () => request<CodexSubscriptionSettings>(`${base}/settings`),
   updateSettings: (body: CodexSubscriptionSettingsUpdate) =>
     request<CodexSubscriptionSettings>(`${base}/settings`, {

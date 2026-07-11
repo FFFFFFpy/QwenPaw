@@ -217,3 +217,51 @@ async def test_incomplete_response_is_an_error_with_safe_details(tmp_path):
         [chunk async for chunk in response]
     assert caught.value.error_code == "CODEX_RESPONSE_INCOMPLETE"
     assert caught.value.details["reason"] == "max_output_tokens"
+
+
+@pytest.mark.asyncio
+async def test_availability_changes_only_for_success_and_permission(tmp_path):
+    store = TokenStore(tmp_path / "oauth.enc")
+    store.save(
+        TokenRecord(
+            account_local_id="default",
+            access_token="access",
+            refresh_token="refresh",
+            account_id="acct",
+            expires_at=time.time() + 3600,
+            last_refresh_at=time.time(),
+        )
+    )
+    updates = []
+    model = ChatGPTSubscriptionChatModel(
+        credential=CodexSubscriptionCredential(id="test", name="test"),
+        model="gpt-5.6-luna",
+        parameters=ChatGPTSubscriptionChatModel.Parameters(),
+        token_store=store,
+        oauth_service=OAuthService(store),
+        http_client=FakeHTTP(),
+        availability_callback=lambda model_id, value: updates.append(
+            (model_id, value)
+        ),
+    )
+    response = await model(
+        [UserMsg(name="user", content=[TextBlock(text="ping")])]
+    )
+    [chunk async for chunk in response]
+    assert updates == [("gpt-5.6-luna", "available")]
+
+    class ForbiddenHTTP:
+        async def stream(self, **kwargs):
+            raise CodexSubscriptionError(
+                "CODEX_MODEL_UNAVAILABLE", "forbidden", status_code=403
+            )
+            yield  # pragma: no cover
+
+    updates.clear()
+    model.http_client = ForbiddenHTTP()
+    response = await model(
+        [UserMsg(name="user", content=[TextBlock(text="ping")])]
+    )
+    with pytest.raises(CodexSubscriptionError):
+        [chunk async for chunk in response]
+    assert updates == [("gpt-5.6-luna", "unavailable")]

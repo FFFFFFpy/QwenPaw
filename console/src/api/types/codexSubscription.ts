@@ -1,5 +1,3 @@
-import type { ModelInfo } from "./provider";
-
 export type CodexLoginFlow = "browser";
 
 export interface CodexAccountStatus {
@@ -25,16 +23,55 @@ export interface CodexLoginStatus {
 }
 
 export interface CodexModelsRefresh {
-  models: ModelInfo[];
-  source: "subscription_catalog";
-  availability: Record<
-    string,
-    "unknown_until_validated" | "available" | "unavailable"
-  >;
+  source: "bundled_compatibility_catalog";
+  chat_models: CodexChatModel[];
+  image_models: CodexImageModel[];
+}
+
+export type CodexAvailability = "unknown" | "available" | "unavailable";
+
+export interface CodexChatModel {
+  model_id: string;
+  display_name: string;
+  description: string;
+  kind: "chat";
+  availability: CodexAvailability;
+  is_active: boolean;
+  capabilities: Array<"text" | "image_input" | "tools">;
+  reasoning_effort: string | null;
+  default_reasoning_effort: string;
+  reasoning_effort_options: string[];
+  relay_reasoning: boolean;
   context_size: number;
   compact_threshold: number;
   compact_trigger: number;
-  max_output_tokens: number;
+  catalog_max_output_tokens: number;
+}
+
+export interface CodexImageModel {
+  model_id: "gpt-image-2";
+  display_name: string;
+  description: string;
+  kind: "image_generation";
+  availability: CodexAvailability;
+  is_default: boolean;
+  capabilities: Array<"image_generate" | "image_edit" | "multiple_references">;
+  max_count: number;
+  max_input_images: number;
+  output_formats: Array<"png" | "jpeg" | "webp">;
+}
+
+export interface CodexChatModelSettings {
+  reasoning_effort: string | null;
+  relay_reasoning: boolean;
+}
+
+export interface CodexImageModelSettings {
+  size: string;
+  quality: "auto" | "low" | "medium" | "high";
+  output_format: "png" | "jpeg" | "webp";
+  background: "auto" | "opaque" | "transparent";
+  count: number;
 }
 
 export interface CodexRateLimits {

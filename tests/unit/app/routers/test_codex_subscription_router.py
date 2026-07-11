@@ -15,6 +15,9 @@ from qwenpaw.providers.codex_subscription.token_store import (
     TokenRecord,
     TokenStore,
 )
+from qwenpaw.providers.codex_subscription.settings import (
+    CodexSubscriptionSettings,
+)
 
 
 def application(tmp_path, *, connected=False):
@@ -26,6 +29,8 @@ def application(tmp_path, *, connected=False):
     )
     provider._token_store = TokenStore(tmp_path / "oauth.enc")
     provider._oauth = OAuthService(provider._token_store)
+    provider._settings_path = tmp_path / "settings.json"
+    provider._settings = CodexSubscriptionSettings()
     if connected:
         provider.token_store.save(
             TokenRecord(
@@ -79,13 +84,76 @@ def test_catalog_has_fixed_context_policy(tmp_path):
         "/api/providers/openai-codex/models"
     )
     assert response.status_code == 200
-    assert [row["id"] for row in response.json()["models"]] == [
+    body = response.json()
+    assert body["source"] == "bundled_compatibility_catalog"
+    assert [row["model_id"] for row in body["chat_models"]] == [
         "gpt-5.6-sol",
         "gpt-5.6-terra",
         "gpt-5.6-luna",
     ]
-    assert response.json()["context_size"] == 262144
-    assert response.json()["compact_trigger"] == 235930
+    assert body["chat_models"][0]["context_size"] == 262144
+    assert body["chat_models"][0]["compact_trigger"] == 235930
+    assert body["chat_models"][0]["catalog_max_output_tokens"] == 128000
+    assert body["chat_models"][0]["capabilities"] == [
+        "text",
+        "image_input",
+        "tools",
+    ]
+    assert body["image_models"][0]["model_id"] == "gpt-image-2"
+
+
+def test_per_model_settings_validate_effort_and_forbid_kwargs(tmp_path):
+    client = TestClient(application(tmp_path))
+    path = "/api/providers/openai-codex/models/gpt-5.6-luna/settings"
+    response = client.put(
+        path,
+        json={"reasoning_effort": "max", "relay_reasoning": False},
+    )
+    assert response.status_code == 200
+    assert response.json() == {
+        "reasoning_effort": "max",
+        "relay_reasoning": False,
+    }
+    assert client.get(path).json() == response.json()
+    assert (
+        client.put(
+            path,
+            json={
+                "reasoning_effort": "ultra",
+                "relay_reasoning": True,
+            },
+        ).status_code
+        == 400
+    )
+    assert (
+        client.put(
+            path,
+            json={
+                "reasoning_effort": "low",
+                "relay_reasoning": True,
+                "max_tokens": 1,
+            },
+        ).status_code
+        == 422
+    )
+
+
+def test_image_model_settings_are_independent(tmp_path):
+    client = TestClient(application(tmp_path))
+    path = "/api/providers/openai-codex/image-models/gpt-image-2/settings"
+    response = client.put(
+        path,
+        json={
+            "size": "1024x1024",
+            "quality": "high",
+            "output_format": "webp",
+            "background": "transparent",
+            "count": 4,
+        },
+    )
+    assert response.status_code == 200
+    assert response.json()["output_format"] == "webp"
+    assert response.json()["count"] == 4
 
 
 def test_dedicated_oauth_route_precedes_generic_provider_route(tmp_path):

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import AsyncGenerator
 import time
-from typing import Any
+from typing import Any, Callable
 
 import httpx
 from agentscope.credential import CredentialBase
@@ -50,12 +50,14 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
         max_retries: int = 0,
         retry_delay: float = 1.0,
         context_size: int = 262_144,
+        availability_callback: Callable[[str, str], None] | None = None,
     ) -> None:
         self.token_store = token_store or TokenStore()
         self.oauth_service = oauth_service or OAuthService(self.token_store)
         self.http_client = http_client or CodexResponsesHTTPClient()
         self.mapper = mapper or ResponsesMapper()
         self.relay_reasoning = relay_reasoning
+        self.availability_callback = availability_callback
         super().__init__(
             credential=credential,
             model=model,
@@ -190,6 +192,8 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                     usage=chat_usage,
                     finished_reason=FinishedReason.COMPLETED,
                 )
+                if self.availability_callback:
+                    self.availability_callback(str(body["model"]), "available")
                 return
             except httpx.HTTPError as exc:
                 if emitted_any or emitted_tool_call:
@@ -202,6 +206,13 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                     "CODEX_NETWORK", "Unable to connect to ChatGPT"
                 ) from exc
             except CodexSubscriptionError as exc:
+                if (
+                    exc.status_code in {403, 404}
+                    and self.availability_callback
+                ):
+                    self.availability_callback(
+                        str(body["model"]), "unavailable"
+                    )
                 if (
                     exc.status_code == 401
                     and not refreshed_after_401

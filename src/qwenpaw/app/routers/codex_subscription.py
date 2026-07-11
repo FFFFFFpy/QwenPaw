@@ -2,27 +2,26 @@
 
 from __future__ import annotations
 
-from typing import NoReturn
+from typing import Any, Literal, NoReturn
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
-from qwenpaw.constant import SECRET_DIR
 from qwenpaw.providers.codex_subscription.catalog import (
-    COMPACTION_THRESHOLD,
-    COMPACTION_TRIGGER_TOKENS,
-    MAX_OUTPUT_TOKENS,
-    WORK_CONTEXT_TOKENS,
+    CATALOG_SOURCE,
+    chat_catalog_entry,
+    image_catalog_entry,
+    reasoning_options,
 )
 from qwenpaw.providers.codex_subscription.errors import CodexSubscriptionError
 from qwenpaw.providers.codex_subscription.provider import (
     CodexSubscriptionProvider,
 )
 from qwenpaw.providers.codex_subscription.settings import (
-    CodexSubscriptionSettings,
+    ChatModelSettings,
+    ImageModelSettings,
     direct_transport_enabled,
 )
-from qwenpaw.providers.provider import ModelInfo
 from qwenpaw.providers.provider_manager import ProviderManager
 
 router = APIRouter(
@@ -53,33 +52,20 @@ class AccountResponse(BaseModel):
 
 
 class ModelsResponse(BaseModel):
-    models: list[ModelInfo]
-    source: str = "subscription_catalog"
-    availability: dict[str, str] = Field(
-        default_factory=lambda: {
-            "gpt-5.6-sol": "unknown_until_validated",
-            "gpt-5.6-terra": "unknown_until_validated",
-            "gpt-5.6-luna": "unknown_until_validated",
-        }
-    )
-    context_size: int = WORK_CONTEXT_TOKENS
-    compact_threshold: float = COMPACTION_THRESHOLD
-    compact_trigger: int = COMPACTION_TRIGGER_TOKENS
-    max_output_tokens: int = MAX_OUTPUT_TOKENS
+    source: Literal["bundled_compatibility_catalog"] = CATALOG_SOURCE
+    chat_models: list[dict[str, Any]]
+    image_models: list[dict[str, Any]]
 
 
-class SettingsResponse(BaseModel):
-    transport: str
-    reasoning_effort: str | None
-    relay_reasoning: bool
-    context_size: int
-    compact_threshold: float
-    direct_enabled: bool
+class ChatSettingsUpdate(BaseModel):
+    model_config = ConfigDict(extra="forbid")
 
-
-class SettingsUpdateRequest(BaseModel):
     reasoning_effort: str | None = None
-    relay_reasoning: bool | None = None
+    relay_reasoning: bool
+
+
+class ImageSettingsUpdate(ImageModelSettings):
+    model_config = ConfigDict(extra="forbid")
 
 
 async def _manager(request: Request) -> ProviderManager:
@@ -115,6 +101,41 @@ def _raise_http(exc: CodexSubscriptionError) -> NoReturn:
     ) from exc
 
 
+def _active_model_id(manager: ProviderManager) -> str | None:
+    getter = getattr(manager, "get_active_model", None)
+    active = getter() if callable(getter) else None
+    if active and getattr(active, "provider_id", None) == "openai-codex":
+        return str(getattr(active, "model", "")) or None
+    return None
+
+
+def _models_response(
+    manager: ProviderManager, provider: CodexSubscriptionProvider
+) -> ModelsResponse:
+    active = _active_model_id(manager)
+    return ModelsResponse(
+        chat_models=[
+            chat_catalog_entry(
+                model.id,
+                availability=provider.availability(model.id),
+                is_active=model.id == active,
+                reasoning_effort=provider.settings.chat_model(
+                    model.id
+                ).reasoning_effort,
+                relay_reasoning=provider.settings.chat_model(
+                    model.id
+                ).relay_reasoning,
+            )
+            for model in provider.models
+        ],
+        image_models=[
+            image_catalog_entry(
+                availability=provider.availability("gpt-image-2")
+            )
+        ],
+    )
+
+
 @router.get("/account", response_model=AccountResponse)
 async def account_read(
     manager: ProviderManager = Depends(_manager),
@@ -147,7 +168,9 @@ async def oauth_complete(
 ) -> AccountResponse:
     try:
         value = await _provider(manager).auth_service.complete(
-            callback_url=body.callback_url, code=body.code, state=body.state
+            callback_url=body.callback_url,
+            code=body.code,
+            state=body.state,
         )
         return AccountResponse.model_validate(value)
     except CodexSubscriptionError as exc:
@@ -170,22 +193,83 @@ async def logout(manager: ProviderManager = Depends(_manager)) -> None:
 async def models(
     manager: ProviderManager = Depends(_manager),
 ) -> ModelsResponse:
-    return ModelsResponse(
-        models=[
-            model.model_copy(deep=True) for model in _provider(manager).models
-        ]
-    )
+    return _models_response(manager, _provider(manager))
 
 
 @router.post("/models/refresh", response_model=ModelsResponse)
 async def models_refresh(
     manager: ProviderManager = Depends(_manager),
 ) -> ModelsResponse:
-    provider = _provider(manager)
+    return _models_response(manager, _provider(manager))
+
+
+@router.get("/models/{model_id}/settings", response_model=ChatModelSettings)
+async def read_chat_settings(
+    model_id: str, manager: ProviderManager = Depends(_manager)
+) -> ChatModelSettings:
     try:
-        return ModelsResponse(models=await provider.fetch_models())
+        return _provider(manager).settings.chat_model(model_id)
     except CodexSubscriptionError as exc:
         _raise_http(exc)
+
+
+@router.put("/models/{model_id}/settings", response_model=ChatModelSettings)
+async def update_chat_settings(
+    model_id: str,
+    body: ChatSettingsUpdate,
+    manager: ProviderManager = Depends(_manager),
+) -> ChatModelSettings:
+    provider = _provider(manager)
+    try:
+        current = provider.settings.chat_model(model_id)
+    except CodexSubscriptionError as exc:
+        _raise_http(exc)
+    effort = body.reasoning_effort
+    if effort == "auto":
+        effort = None
+    if effort is not None and effort not in reasoning_options(model_id):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "CODEX_REASONING_INVALID",
+                "message": "Unsupported reasoning effort for this model",
+            },
+        )
+    current.reasoning_effort = effort
+    current.relay_reasoning = body.relay_reasoning
+    provider.save_settings()
+    return current
+
+
+@router.get(
+    "/image-models/{model_id}/settings", response_model=ImageModelSettings
+)
+async def read_image_settings(
+    model_id: str, manager: ProviderManager = Depends(_manager)
+) -> ImageModelSettings:
+    try:
+        return _provider(manager).settings.image_model(model_id)
+    except CodexSubscriptionError as exc:
+        _raise_http(exc)
+
+
+@router.put(
+    "/image-models/{model_id}/settings", response_model=ImageModelSettings
+)
+async def update_image_settings(
+    model_id: str,
+    body: ImageSettingsUpdate,
+    manager: ProviderManager = Depends(_manager),
+) -> ImageModelSettings:
+    provider = _provider(manager)
+    try:
+        provider.settings.image_model(model_id)
+    except CodexSubscriptionError as exc:
+        _raise_http(exc)
+    updated = ImageModelSettings.model_validate(body.model_dump())
+    provider.settings.image_models[model_id] = updated
+    provider.save_settings()
+    return updated
 
 
 @router.get("/rate-limits")
@@ -205,55 +289,3 @@ async def validate(
 ) -> dict[str, object]:
     connected, message = await _provider(manager).check_connection()
     return {"valid": connected, "message": message}
-
-
-@router.get("/settings", response_model=SettingsResponse)
-async def read_settings(
-    manager: ProviderManager = Depends(_manager),
-) -> SettingsResponse:
-    settings = _provider(manager).settings
-    return SettingsResponse(
-        **settings.model_dump(
-            include={
-                "transport",
-                "reasoning_effort",
-                "relay_reasoning",
-                "context_size",
-                "compact_threshold",
-            }
-        ),
-        direct_enabled=direct_transport_enabled(),
-    )
-
-
-@router.put("/settings", response_model=SettingsResponse)
-async def update_settings(
-    body: SettingsUpdateRequest, manager: ProviderManager = Depends(_manager)
-) -> SettingsResponse:
-    provider = _provider(manager)
-    updates = provider.settings.model_dump()
-    if body.reasoning_effort is not None:
-        if body.reasoning_effort not in {
-            "auto",
-            "low",
-            "medium",
-            "high",
-            "xhigh",
-            "max",
-            "ultra",
-        }:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "code": "CODEX_REASONING_INVALID",
-                    "message": "Unsupported reasoning effort",
-                },
-            )
-        updates["reasoning_effort"] = (
-            None if body.reasoning_effort == "auto" else body.reasoning_effort
-        )
-    if body.relay_reasoning is not None:
-        updates["relay_reasoning"] = body.relay_reasoning
-    provider._settings = CodexSubscriptionSettings.model_validate(updates)
-    provider.settings.save(SECRET_DIR / "codex_subscription" / "settings.json")
-    return await read_settings(manager)
