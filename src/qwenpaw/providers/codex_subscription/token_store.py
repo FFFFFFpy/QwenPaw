@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Encrypted, account-scoped OAuth credential storage and refresh locking."""
 
 from __future__ import annotations
@@ -60,7 +61,7 @@ class TokenStore:
             )
         try:
             payload = json.loads(
-                decrypt(self.path.read_text(encoding="utf-8"))
+                decrypt(self.path.read_text(encoding="utf-8")),
             )
             record = TokenRecord.model_validate(payload)
         except Exception as exc:
@@ -88,7 +89,7 @@ class TokenStore:
                 "refresh_token": record.refresh_token.get_secret_value(),
                 "id_token": record.id_token.get_secret_value(),
                 "account_id": record.account_id.get_secret_value(),
-            }
+            },
         )
         encoded = encrypt(json.dumps(payload, ensure_ascii=False))
         flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL

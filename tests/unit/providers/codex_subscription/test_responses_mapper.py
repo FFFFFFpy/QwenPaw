@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import pytest
 from agentscope.message import (
     AssistantMsg,
@@ -30,8 +31,9 @@ async def test_maps_messages_tools_images_without_xml():
                 TextBlock(text="hello"),
                 DataBlock(
                     source=Base64Source(
-                        data="aGVsbG8=", media_type="image/png"
-                    )
+                        data="aGVsbG8=",
+                        media_type="image/png",
+                    ),
                 ),
             ],
         ),
@@ -60,7 +62,7 @@ async def test_maps_messages_tools_images_without_xml():
                     "description": "read",
                     "parameters": {"type": "object"},
                 },
-            }
+            },
         ],
         reasoning_effort="low",
     )
@@ -104,8 +106,8 @@ async def test_formatter_preserves_tool_text_order_and_assistant_output_text():
                     TextBlock(text="after"),
                     ToolCallBlock(id="two", name="second", input="{}"),
                 ],
-            )
-        ]
+            ),
+        ],
     )
     assert [item.get("type", item.get("role")) for item in formatted] == [
         "function_call",

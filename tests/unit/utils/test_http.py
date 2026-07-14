@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=unused-argument
 from __future__ import annotations
 
 import socket
@@ -90,7 +91,7 @@ async def test_ssrf_resolver_pins_first_dns_result_against_rebinding() -> None:
                 6,
                 "",
                 (address, 443),
-            )
+            ),
         ]
 
     resolver = SSRFSafeResolver(rebinding_getaddrinfo)
@@ -147,7 +148,7 @@ async def test_ssrf_download_revalidates_redirect_and_disables_proxy(
         def __init__(self, **kwargs):
             captured.update(kwargs)
             self.responses = [
-                _FakeResponse(302, {"Location": "http://127.0.0.1/secret"})
+                _FakeResponse(302, {"Location": "http://127.0.0.1/secret"}),
             ]
 
         async def __aenter__(self):
@@ -162,12 +163,14 @@ async def test_ssrf_download_revalidates_redirect_and_disables_proxy(
 
     monkeypatch.setenv("HTTPS_PROXY", "http://127.0.0.1:8888")
     monkeypatch.setattr(
-        "qwenpaw.utils.http.aiohttp.ClientSession", FakeSession
+        "qwenpaw.utils.http.aiohttp.ClientSession",
+        FakeSession,
     )
 
     with pytest.raises(SSRFSafeRequestError):
         await download_ssrf_safe(
-            "https://public.example/image.png", max_bytes=1024
+            "https://public.example/image.png",
+            max_bytes=1024,
         )
 
     assert captured["trust_env"] is False

@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=protected-access
 from types import SimpleNamespace
 import time
 
@@ -43,12 +45,12 @@ def application(tmp_path, *, connected=False):
                 account_id="account",
                 expires_at=time.time() + 3600,
                 last_refresh_at=time.time(),
-            )
+            ),
         )
     manager = SimpleNamespace(
         get_provider=lambda provider_id: (
             provider if provider_id == "openai-codex" else None
-        )
+        ),
     )
     app = FastAPI()
     app.state.provider_manager = manager
@@ -58,7 +60,7 @@ def application(tmp_path, *, connected=False):
 
 def test_account_response_is_masked_and_token_free(tmp_path):
     response = TestClient(application(tmp_path, connected=True)).get(
-        "/api/providers/openai-codex/account"
+        "/api/providers/openai-codex/account",
     )
     assert response.status_code == 200
     assert response.json()["email_masked"] == "p***n@example.test"
@@ -68,12 +70,12 @@ def test_account_response_is_masked_and_token_free(tmp_path):
 
 def test_oauth_start_returns_pkce_url_and_manual_callback_support(tmp_path):
     response = TestClient(application(tmp_path)).post(
-        "/api/providers/openai-codex/oauth/start"
+        "/api/providers/openai-codex/oauth/start",
     )
     assert response.status_code == 200
     body = response.json()
     assert body["authorize_url"].startswith(
-        "https://auth.openai.com/oauth/authorize?"
+        "https://auth.openai.com/oauth/authorize?",
     )
     assert "code_challenge_method=S256" in body["authorize_url"]
     assert body["manual_callback_supported"] is True
@@ -83,7 +85,7 @@ def test_oauth_start_returns_pkce_url_and_manual_callback_support(tmp_path):
 
 def test_catalog_has_fixed_context_policy(tmp_path):
     response = TestClient(application(tmp_path)).get(
-        "/api/providers/openai-codex/models"
+        "/api/providers/openai-codex/models",
     )
     assert response.status_code == 200
     body = response.json()
@@ -183,11 +185,11 @@ def test_dedicated_oauth_route_precedes_generic_provider_route(tmp_path):
 
     full_app = FastAPI()
     full_app.state.provider_manager = application(
-        tmp_path
+        tmp_path,
     ).state.provider_manager
     full_app.include_router(api_router, prefix="/api")
     response = TestClient(full_app).post(
-        "/api/providers/openai-codex/oauth/start"
+        "/api/providers/openai-codex/oauth/start",
     )
     assert response.status_code == 200
     assert response.json()["manual_callback_supported"] is True

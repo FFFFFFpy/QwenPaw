@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Marker credential; OAuth secrets remain in the encrypted TokenStore."""
 
 from __future__ import annotations

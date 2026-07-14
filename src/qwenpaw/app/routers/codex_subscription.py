@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """API for QwenPaw's ChatGPT/Codex subscription compatibility provider."""
 
 from __future__ import annotations
@@ -25,7 +26,8 @@ from qwenpaw.providers.codex_subscription.settings import (
 from qwenpaw.providers.provider_manager import ProviderManager
 
 router = APIRouter(
-    prefix="/providers/openai-codex", tags=["openai-codex-subscription"]
+    prefix="/providers/openai-codex",
+    tags=["openai-codex-subscription"],
 )
 
 
@@ -110,7 +112,8 @@ def _active_model_id(manager: ProviderManager) -> str | None:
 
 
 def _models_response(
-    manager: ProviderManager, provider: CodexSubscriptionProvider
+    manager: ProviderManager,
+    provider: CodexSubscriptionProvider,
 ) -> ModelsResponse:
     active = _active_model_id(manager)
     return ModelsResponse(
@@ -120,18 +123,18 @@ def _models_response(
                 availability=provider.availability(model.id),
                 is_active=model.id == active,
                 reasoning_effort=provider.settings.chat_model(
-                    model.id
+                    model.id,
                 ).reasoning_effort,
                 relay_reasoning=provider.settings.chat_model(
-                    model.id
+                    model.id,
                 ).relay_reasoning,
             )
             for model in provider.models
         ],
         image_models=[
             image_catalog_entry(
-                availability=provider.availability("gpt-image-2")
-            )
+                availability=provider.availability("gpt-image-2"),
+            ),
         ],
     )
 
@@ -141,7 +144,7 @@ async def account_read(
     manager: ProviderManager = Depends(_manager),
 ) -> AccountResponse:
     return AccountResponse.model_validate(
-        _provider(manager).token_store.status()
+        _provider(manager).token_store.status(),
     )
 
 
@@ -158,13 +161,14 @@ async def oauth_start(
             },
         )
     return OAuthStartResponse.model_validate(
-        _provider(manager).auth_service.start()
+        _provider(manager).auth_service.start(),
     )
 
 
 @router.post("/oauth/complete", response_model=AccountResponse)
 async def oauth_complete(
-    body: OAuthCompleteRequest, manager: ProviderManager = Depends(_manager)
+    body: OAuthCompleteRequest,
+    manager: ProviderManager = Depends(_manager),
 ) -> AccountResponse:
     try:
         value = await _provider(manager).auth_service.complete(
@@ -179,7 +183,8 @@ async def oauth_complete(
 
 @router.get("/oauth/status")
 async def oauth_status(
-    state: str, manager: ProviderManager = Depends(_manager)
+    state: str,
+    manager: ProviderManager = Depends(_manager),
 ) -> dict[str, object]:
     return _provider(manager).auth_service.login_status(state)
 
@@ -205,7 +210,8 @@ async def models_refresh(
 
 @router.get("/models/{model_id}/settings", response_model=ChatModelSettings)
 async def read_chat_settings(
-    model_id: str, manager: ProviderManager = Depends(_manager)
+    model_id: str,
+    manager: ProviderManager = Depends(_manager),
 ) -> ChatModelSettings:
     try:
         return _provider(manager).settings.chat_model(model_id)
@@ -242,10 +248,12 @@ async def update_chat_settings(
 
 
 @router.get(
-    "/image-models/{model_id}/settings", response_model=ImageModelSettings
+    "/image-models/{model_id}/settings",
+    response_model=ImageModelSettings,
 )
 async def read_image_settings(
-    model_id: str, manager: ProviderManager = Depends(_manager)
+    model_id: str,
+    manager: ProviderManager = Depends(_manager),
 ) -> ImageModelSettings:
     try:
         return _provider(manager).settings.image_model(model_id)
@@ -254,7 +262,8 @@ async def read_image_settings(
 
 
 @router.put(
-    "/image-models/{model_id}/settings", response_model=ImageModelSettings
+    "/image-models/{model_id}/settings",
+    response_model=ImageModelSettings,
 )
 async def update_image_settings(
     model_id: str,

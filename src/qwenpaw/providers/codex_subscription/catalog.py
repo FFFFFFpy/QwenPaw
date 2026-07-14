@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Bundled ChatGPT subscription compatibility catalog."""
 
 from __future__ import annotations

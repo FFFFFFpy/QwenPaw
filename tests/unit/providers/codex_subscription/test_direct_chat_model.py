@@ -1,3 +1,7 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=unused-argument
+# pylint: disable=pointless-statement
+# pylint: disable=unreachable
 import asyncio
 import time
 
@@ -74,14 +78,14 @@ async def test_direct_text_stream_has_no_thread_or_runtime(tmp_path):
             account_id="acct",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
     http = FakeHTTP()
     model = ChatGPTSubscriptionChatModel(
         credential=CodexSubscriptionCredential(id="test", name="test"),
         model="gpt-5.6-luna",
         parameters=ChatGPTSubscriptionChatModel.Parameters(
-            reasoning_effort="low"
+            reasoning_effort="low",
         ),
         token_store=store,
         oauth_service=OAuthService(store),
@@ -91,7 +95,7 @@ async def test_direct_text_stream_has_no_thread_or_runtime(tmp_path):
         [
             SystemMsg(name="system", content=[TextBlock(text="exact")]),
             UserMsg(name="user", content=[TextBlock(text="ping")]),
-        ]
+        ],
     )
     chunks = [chunk async for chunk in response]
     assert chunks[0].content[0].text == "PO"
@@ -115,7 +119,7 @@ async def test_terminal_response_retains_accumulated_tool_call(tmp_path):
             account_id="acct",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
     model = ChatGPTSubscriptionChatModel(
         credential=CodexSubscriptionCredential(id="test", name="test"),
@@ -126,7 +130,7 @@ async def test_terminal_response_retains_accumulated_tool_call(tmp_path):
         http_client=FakeToolHTTP(),
     )
     response = await model(
-        [UserMsg(name="user", content=[TextBlock(text="draw a cat")])]
+        [UserMsg(name="user", content=[TextBlock(text="draw a cat")])],
     )
     chunks = [chunk async for chunk in response]
     terminal = chunks[-1]
@@ -151,7 +155,9 @@ class UnauthorizedOnceHTTP(FakeHTTP):
         self.calls += 1
         if self.calls == 1:
             raise CodexSubscriptionError(
-                "CODEX_NOT_LOGGED_IN", "expired", status_code=401
+                "CODEX_NOT_LOGGED_IN",
+                "expired",
+                status_code=401,
             )
         yield FakeResponse()
 
@@ -167,7 +173,7 @@ async def test_401_refreshes_and_retries_only_once_before_output(tmp_path):
             account_id="acct",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
     oauth = RefreshingOAuth(store)
     http = UnauthorizedOnceHTTP()
@@ -180,7 +186,7 @@ async def test_401_refreshes_and_retries_only_once_before_output(tmp_path):
         http_client=http,
     )
     response = await model(
-        [UserMsg(name="user", content=[TextBlock(text="ping")])]
+        [UserMsg(name="user", content=[TextBlock(text="ping")])],
     )
     chunks = [chunk async for chunk in response]
     assert chunks[0].content[0].text == "PO"
@@ -215,7 +221,7 @@ async def test_partial_stream_is_never_replayed(tmp_path):
             account_id="acct",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
     http = PartialDisconnectHTTP()
     model = ChatGPTSubscriptionChatModel(
@@ -227,7 +233,7 @@ async def test_partial_stream_is_never_replayed(tmp_path):
         http_client=http,
     )
     response = await model(
-        [UserMsg(name="user", content=[TextBlock(text="ping")])]
+        [UserMsg(name="user", content=[TextBlock(text="ping")])],
     )
     with pytest.raises(CodexSubscriptionError):
         [chunk async for chunk in response]
@@ -261,7 +267,7 @@ async def test_incomplete_response_is_an_error_with_safe_details(tmp_path):
             account_id="acct",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
     model = ChatGPTSubscriptionChatModel(
         credential=CodexSubscriptionCredential(id="test", name="test"),
@@ -272,7 +278,7 @@ async def test_incomplete_response_is_an_error_with_safe_details(tmp_path):
         http_client=IncompleteHTTP(),
     )
     response = await model(
-        [UserMsg(name="user", content=[TextBlock(text="ping")])]
+        [UserMsg(name="user", content=[TextBlock(text="ping")])],
     )
     with pytest.raises(CodexSubscriptionError) as caught:
         [chunk async for chunk in response]
@@ -291,7 +297,7 @@ async def test_availability_changes_only_for_success_and_permission(tmp_path):
             account_id="acct",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
     updates = []
     model = ChatGPTSubscriptionChatModel(
@@ -302,11 +308,11 @@ async def test_availability_changes_only_for_success_and_permission(tmp_path):
         oauth_service=OAuthService(store),
         http_client=FakeHTTP(),
         availability_callback=lambda model_id, value: updates.append(
-            (model_id, value)
+            (model_id, value),
         ),
     )
     response = await model(
-        [UserMsg(name="user", content=[TextBlock(text="ping")])]
+        [UserMsg(name="user", content=[TextBlock(text="ping")])],
     )
     [chunk async for chunk in response]
     assert updates == [("gpt-5.6-luna", "available")]
@@ -314,14 +320,16 @@ async def test_availability_changes_only_for_success_and_permission(tmp_path):
     class ForbiddenHTTP:
         async def stream(self, **kwargs):
             raise CodexSubscriptionError(
-                "CODEX_MODEL_UNAVAILABLE", "forbidden", status_code=403
+                "CODEX_MODEL_UNAVAILABLE",
+                "forbidden",
+                status_code=403,
             )
             yield  # pragma: no cover
 
     updates.clear()
     model.http_client = ForbiddenHTTP()
     response = await model(
-        [UserMsg(name="user", content=[TextBlock(text="ping")])]
+        [UserMsg(name="user", content=[TextBlock(text="ping")])],
     )
     with pytest.raises(CodexSubscriptionError):
         [chunk async for chunk in response]
@@ -339,7 +347,7 @@ async def test_cancellation_finishes_as_interrupted(tmp_path):
             account_id="acct",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
 
     class BlockingHTTP:
@@ -365,7 +373,7 @@ async def test_cancellation_finishes_as_interrupted(tmp_path):
         http_client=BlockingHTTP(),
     )
     response = await model(
-        [UserMsg(name="user", content=[TextBlock(text="long response")])]
+        [UserMsg(name="user", content=[TextBlock(text="long response")])],
     )
     chunks = []
 

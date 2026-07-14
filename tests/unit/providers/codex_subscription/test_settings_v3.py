@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import json
 
 import pytest
@@ -33,8 +34,8 @@ def test_v1_v2_global_settings_migrate_only_supported_efforts(tmp_path):
                 "version": 2,
                 "reasoning_effort": "ultra",
                 "relay_reasoning": False,
-            }
-        )
+            },
+        ),
     )
     settings = CodexSubscriptionSettings.load(path)
     assert settings.version == 3

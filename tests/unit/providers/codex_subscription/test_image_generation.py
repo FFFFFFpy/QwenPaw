@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=protected-access
 import base64
 import io
 import time
@@ -61,7 +63,7 @@ def token_store(tmp_path):
             account_id="account",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
     return store
 
@@ -76,7 +78,10 @@ def token_store(tmp_path):
     ],
 )
 async def test_generates_valid_raster_formats(
-    tmp_path, image_format, extension, mime
+    tmp_path,
+    image_format,
+    extension,
+    mime,
 ):
     store = token_store(tmp_path)
     http = FakeHTTP(encoded_image(image_format))

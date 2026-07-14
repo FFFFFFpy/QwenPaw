@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=use-dict-literal
 import asyncio
 import time
 
@@ -73,7 +75,7 @@ async def test_concurrent_401_force_refresh_is_generation_aware(tmp_path):
                 stale_access_token="stale",
             )
             for _ in range(8)
-        )
+        ),
     )
     assert calls == 1
 
@@ -109,5 +111,5 @@ async def test_concurrent_401_across_store_instances_refreshes_once(tmp_path):
 
     assert calls == 1
     assert {item.access_token.get_secret_value() for item in results} == {
-        "fresh"
+        "fresh",
     }

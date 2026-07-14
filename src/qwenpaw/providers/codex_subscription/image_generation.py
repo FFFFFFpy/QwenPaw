@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=too-many-branches
 """GPT Image generation over the ChatGPT/Codex compatibility route."""
 
 from __future__ import annotations
@@ -71,7 +73,8 @@ class ImageGenerationService:
             )
         if not 1 <= count <= 4:
             raise CodexSubscriptionError(
-                "CODEX_IMAGE_COUNT_INVALID", "Image count must be 1 to 4"
+                "CODEX_IMAGE_COUNT_INVALID",
+                "Image count must be 1 to 4",
             )
         if len(references) > 5:
             raise CodexSubscriptionError(
@@ -85,16 +88,17 @@ class ImageGenerationService:
             )
 
         content: list[dict[str, Any]] = [
-            {"type": "input_text", "text": prompt.strip()}
+            {"type": "input_text", "text": prompt.strip()},
         ]
         for reference in references:
             content.append(
                 {
                     "type": "input_image",
                     "image_url": await self._reference_data_url(
-                        reference, workspace
+                        reference,
+                        workspace,
                     ),
-                }
+                },
             )
         body = {
             "model": "gpt-5.6-sol",
@@ -108,7 +112,7 @@ class ImageGenerationService:
                     "quality": quality,
                     "output_format": output_format,
                     "background": background,
-                }
+                },
             ],
             "tool_choice": {"type": "image_generation"},
             "stream": True,
@@ -139,7 +143,8 @@ class ImageGenerationService:
                 break
         if not images:
             raise CodexSubscriptionError(
-                "CODEX_IMAGE_EMPTY", "ChatGPT returned no generated image"
+                "CODEX_IMAGE_EMPTY",
+                "ChatGPT returned no generated image",
             )
         if len(images) > count:
             images = images[:count]
@@ -147,7 +152,9 @@ class ImageGenerationService:
         return images
 
     async def _request(
-        self, body: dict[str, Any], record: Any
+        self,
+        body: dict[str, Any],
+        record: Any,
     ) -> list[GeneratedImage]:
         results: list[GeneratedImage] = []
         seen: set[str] = set()
@@ -161,9 +168,9 @@ class ImageGenerationService:
                 responses_lite=False,
             ):
 
-                async def limited_lines():
+                async def limited_lines(stream_response: httpx.Response):
                     nonlocal total_bytes
-                    async for line in response.aiter_lines():
+                    async for line in stream_response.aiter_lines():
                         total_bytes += len(line.encode("utf-8"))
                         if total_bytes > MAX_SSE_BYTES:
                             raise CodexSubscriptionError(
@@ -172,7 +179,7 @@ class ImageGenerationService:
                             )
                         yield line
 
-                async for event in iter_sse_events(limited_lines()):
+                async for event in iter_sse_events(limited_lines(response)):
                     event_count += 1
                     if event_count > MAX_SSE_EVENTS:
                         raise CodexSubscriptionError(
@@ -207,11 +214,12 @@ class ImageGenerationService:
                                     if item.get("revised_prompt")
                                     else None
                                 ),
-                            )
+                            ),
                         )
         except httpx.HTTPError as exc:
             raise CodexSubscriptionError(
-                "CODEX_NETWORK", "Image generation connection was interrupted"
+                "CODEX_NETWORK",
+                "Image generation connection was interrupted",
             ) from exc
         return results
 
@@ -247,7 +255,9 @@ class ImageGenerationService:
 
     @staticmethod
     def _decode_image(
-        encoded: str, *, revised_prompt: str | None
+        encoded: str,
+        *,
+        revised_prompt: str | None,
     ) -> GeneratedImage:
         if len(encoded) > MAX_IMAGE_BASE64_CHARS:
             raise CodexSubscriptionError(
@@ -258,7 +268,8 @@ class ImageGenerationService:
             data = base64.b64decode(encoded, validate=True)
         except ValueError as exc:
             raise CodexSubscriptionError(
-                "CODEX_IMAGE_INVALID", "Generated image data is invalid"
+                "CODEX_IMAGE_INVALID",
+                "Generated image data is invalid",
             ) from exc
         try:
             with Image.open(io.BytesIO(data)) as image:
@@ -301,7 +312,8 @@ class ImageGenerationService:
                 )
             data = await asyncio.to_thread(path.read_bytes)
         decoded = self._decode_image(
-            base64.b64encode(data).decode(), revised_prompt=None
+            base64.b64encode(data).decode(),
+            revised_prompt=None,
         )
         encoded = base64.b64encode(data).decode()
         return f"data:{decoded.mime_type};base64,{encoded}"
