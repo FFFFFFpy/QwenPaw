@@ -167,8 +167,6 @@ async def download_ssrf_safe(
                             )
                         chunks.append(chunk)
                     return b"".join(chunks)
-    except SSRFSafeRequestError:
-        raise
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         raise SSRFSafeRequestError(
             "Remote resource could not be downloaded",
