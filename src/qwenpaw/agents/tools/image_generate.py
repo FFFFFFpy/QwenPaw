@@ -1,3 +1,7 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=too-many-return-statements
+# pylint: disable=too-many-branches
+# pylint: disable=too-many-statements
 """Built-in real raster image generation and editing tool."""
 
 from __future__ import annotations
@@ -147,7 +151,7 @@ def _text_result(payload: Any, *, error: bool = False) -> ToolChunk:
         is_last=True,
         state=ToolResultState.ERROR if error else ToolResultState.SUCCESS,
         content=[
-            TextBlock(text=json.dumps(payload, ensure_ascii=False, indent=2))
+            TextBlock(text=json.dumps(payload, ensure_ascii=False, indent=2)),
         ],
     )
 
@@ -164,10 +168,11 @@ def _media_result(record: _ImageTask, *, reused: bool = False) -> ToolChunk:
             DataBlock(
                 id=_resource_id(record, index),
                 source=URLSource(
-                    url=_path_to_file_url(str(path)), media_type=mime
+                    url=_path_to_file_url(str(path)),
+                    media_type=mime,
                 ),
                 name=path.name,
-            )
+            ),
         )
     blocks.append(
         TextBlock(
@@ -175,11 +180,13 @@ def _media_result(record: _ImageTask, *, reused: bool = False) -> ToolChunk:
                 {**_task_payload(record), "reused": reused},
                 ensure_ascii=False,
                 indent=2,
-            )
-        )
+            ),
+        ),
     )
     return ToolChunk(
-        is_last=True, state=ToolResultState.SUCCESS, content=blocks
+        is_last=True,
+        state=ToolResultState.SUCCESS,
+        content=blocks,
     )
 
 
@@ -258,20 +265,25 @@ async def image_generate(
     if action in {"status", "cancel"}:
         async with _registry_lock:
             _sweep_registry()
-            record = _tasks.get(task_id or "")
-            if record is None or record.session_id != session_id:
+            status_record = _tasks.get(task_id or "")
+            if status_record is None or status_record.session_id != session_id:
                 return _text_result(
                     {"ok": False, "error": "Image task was not found"},
                     error=True,
                 )
-            if action == "cancel" and record.task and not record.task.done():
-                record.task.cancel()
-                record.status = "cancelled"
-                record.updated_at = time.time()
-        return _text_result(_task_payload(record))
+            if (
+                action == "cancel"
+                and status_record.task
+                and not status_record.task.done()
+            ):
+                status_record.task.cancel()
+                status_record.status = "cancelled"
+                status_record.updated_at = time.time()
+        return _text_result(_task_payload(status_record))
     if action not in {"generate", "edit"}:
         return _text_result(
-            {"ok": False, "error": "Unsupported image action"}, error=True
+            {"ok": False, "error": "Unsupported image action"},
+            error=True,
         )
     if model != "gpt-image-2":
         return _text_result(
@@ -298,7 +310,7 @@ async def image_generate(
         )
     settings_path = SECRET_DIR / "codex_subscription" / "settings.json"
     settings = CodexSubscriptionSettings.load(settings_path).image_model(
-        "gpt-image-2"
+        "gpt-image-2",
     )
     try:
         resolved = ImageModelSettings(
@@ -332,7 +344,7 @@ async def image_generate(
             },
             ensure_ascii=False,
             sort_keys=True,
-        ).encode()
+        ).encode(),
     ).hexdigest()
 
     async with _registry_lock:
@@ -340,15 +352,17 @@ async def image_generate(
         fingerprint_key = (session_id, fingerprint)
         fingerprint_entry = _fingerprints.get(fingerprint_key)
         existing = _tasks.get(
-            fingerprint_entry.task_id if fingerprint_entry else ""
+            fingerprint_entry.task_id if fingerprint_entry else "",
         )
         joined_running = bool(
             existing
             and existing.status == "running"
             and existing.task
-            and not existing.task.done()
+            and not existing.task.done(),
         )
+        record: _ImageTask
         if joined_running:
+            assert existing is not None
             record = existing
         else:
             record = _ImageTask(
@@ -363,12 +377,13 @@ async def image_generate(
                     references=references,
                     workspace=workspace,
                     **options,
-                )
+                ),
             )
             _tasks[record.task_id] = record
             _fingerprints[fingerprint_key] = _FingerprintEntry(record.task_id)
 
     try:
+        assert record.task is not None
         generated = await cancellable_wait(record.task, fallback_secs=600)
         async with record.save_lock:
             if record.status != "completed":

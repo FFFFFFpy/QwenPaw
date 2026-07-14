@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Stable, scrubbed errors for the ChatGPT subscription transport."""
 
 from __future__ import annotations
@@ -33,7 +34,8 @@ class CodexSubscriptionError(ProviderError):
 
 class CodexProtocolError(CodexSubscriptionError):
     def __init__(
-        self, message: str = "ChatGPT subscription protocol changed"
+        self,
+        message: str = "ChatGPT subscription protocol changed",
     ) -> None:
         super().__init__("CODEX_PROTOCOL_INCOMPATIBLE", message)
 
@@ -78,7 +80,7 @@ _EMAIL = re.compile(r"(?i)([a-z0-9.!#$%&'*+/=?^_`{|}~-])[^\s@]*@([a-z0-9.-]+)")
 _SECRET = re.compile(
     r"(?i)(?:bearer\s+[^\s,]+|sk-[a-z0-9_-]{8,}|"
     r"(?:access|refresh|id)[_-]?token[=:]\s*[^\s&,]+|"
-    r"(?:code|authorization)[=:]\s*[^\s&,]+)"
+    r"(?:code|authorization)[=:]\s*[^\s&,]+)",
 )
 _JWT = re.compile(r"\beyJ[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\.[a-zA-Z0-9_-]+\b")
 
@@ -87,7 +89,8 @@ def scrub_sensitive_text(value: str) -> str:
     value = _JWT.sub("[REDACTED_TOKEN]", value)
     value = _SECRET.sub("[REDACTED]", value)
     return _EMAIL.sub(
-        lambda match: f"{match.group(1)}***@{match.group(2)}", value
+        lambda match: f"{match.group(1)}***@{match.group(2)}",
+        value,
     )
 
 

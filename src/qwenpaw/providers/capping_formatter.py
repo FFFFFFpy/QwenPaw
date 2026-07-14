@@ -1,4 +1,5 @@
 # -*- coding: utf-8 -*-
+# pylint: disable=too-many-branches
 """Capping formatters that refuse to inline oversized local media.
 
 agentscope's chat formatters (OpenAI, Anthropic, Gemini, DashScope, …) all
@@ -278,10 +279,13 @@ class _CappingOpenAIResponseFormatter(
         for msg in msgs:
             content: list[dict[str, Any]] = []
 
-            def flush_content() -> None:
-                if content:
-                    items.append({"role": msg.role, "content": list(content)})
-                    content.clear()
+            def flush_content(
+                buffer: list[dict[str, Any]],
+                role: str,
+            ) -> None:
+                if buffer:
+                    items.append({"role": role, "content": list(buffer)})
+                    buffer.clear()
 
             for block in msg.get_content_blocks():
                 if isinstance(block, TextBlock):
@@ -293,14 +297,14 @@ class _CappingOpenAIResponseFormatter(
                                 else "input_text"
                             ),
                             "text": block.text,
-                        }
+                        },
                     )
                 elif isinstance(block, DataBlock):
                     formatted = self._format_response_data_block(block)
                     if formatted is not None:
                         content.append(formatted)
                 elif isinstance(block, HintBlock):
-                    flush_content()
+                    flush_content(content, msg.role)
                     hint_blocks = (
                         [TextBlock(text=block.hint)]
                         if isinstance(block.hint, str)
@@ -310,7 +314,7 @@ class _CappingOpenAIResponseFormatter(
                     for hint in hint_blocks:
                         if isinstance(hint, TextBlock):
                             hint_content.append(
-                                {"type": "input_text", "text": hint.text}
+                                {"type": "input_text", "text": hint.text},
                             )
                         elif isinstance(hint, DataBlock):
                             formatted = self._format_response_data_block(hint)
@@ -321,7 +325,7 @@ class _CappingOpenAIResponseFormatter(
                 elif isinstance(block, ThinkingBlock):
                     reasoning_id = getattr(block, "reasoning_item_id", None)
                     if reasoning_id:
-                        flush_content()
+                        flush_content(content, msg.role)
                         items.append(
                             {
                                 "type": "reasoning",
@@ -331,50 +335,50 @@ class _CappingOpenAIResponseFormatter(
                                         {
                                             "type": "summary_text",
                                             "text": block.thinking,
-                                        }
+                                        },
                                     ]
                                     if block.thinking
                                     else []
                                 ),
                                 "content": [],
-                            }
+                            },
                         )
                 elif isinstance(block, ToolCallBlock):
-                    flush_content()
+                    flush_content(content, msg.role)
                     items.append(
                         {
                             "type": "function_call",
                             "call_id": block.id,
                             "name": block.name,
                             "arguments": block.input,
-                        }
+                        },
                     )
                 elif isinstance(block, ToolResultBlock):
-                    flush_content()
+                    flush_content(content, msg.role)
                     textual, multimodal = self.convert_tool_result_to_string(
-                        block.output
+                        block.output,
                     )
                     items.append(
                         {
                             "type": "function_call_output",
                             "call_id": block.id,
                             "output": textual,
-                        }
+                        },
                     )
                     promoted: list[dict[str, Any]] = []
                     for result in multimodal:
                         if isinstance(result, TextBlock):
                             promoted.append(
-                                {"type": "input_text", "text": result.text}
+                                {"type": "input_text", "text": result.text},
                             )
                         elif isinstance(result, DataBlock):
                             formatted = self._format_response_data_block(
-                                result
+                                result,
                             )
                             if formatted is not None:
                                 promoted.append(formatted)
                     if promoted:
                         items.append({"role": "user", "content": promoted})
-            flush_content()
+            flush_content(content, msg.role)
 
         return items

@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=protected-access
 from types import SimpleNamespace
 
 import pytest
@@ -45,7 +47,7 @@ async def test_image_generate_available_for_codex_active_provider():
     registry = _CapturingRegistry()
 
     await _workspace(registry).list_tools(
-        agent_config=_agent_config("openai-codex")
+        agent_config=_agent_config("openai-codex"),
     )
 
     assert "image_generate" not in registry.filters[0]["denied"]

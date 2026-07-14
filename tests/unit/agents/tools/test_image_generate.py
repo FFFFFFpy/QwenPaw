@@ -1,3 +1,8 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=reimported
+# pylint: disable=unused-argument
+# pylint: disable=protected-access
+# pylint: disable=redefined-outer-name
 import asyncio
 import importlib
 import json
@@ -39,7 +44,9 @@ def reset_image_tasks(tmp_path, monkeypatch):
     monkeypatch.setattr(image_module, "_service", fake)
     monkeypatch.setattr(image_module, "SECRET_DIR", tmp_path / "secrets")
     monkeypatch.setattr(
-        image_module, "_active_provider_id", lambda: "openai-codex"
+        image_module,
+        "_active_provider_id",
+        lambda: "openai-codex",
     )
     set_current_workspace_dir(tmp_path)
     set_current_session_id("session/one")
@@ -66,7 +73,7 @@ async def test_tool_saves_attachment_without_base64_history(reset_image_tasks):
         {
             "filename": path.name,
             "resource_id": f"image_{payload['task_id']}_1",
-        }
+        },
     ]
     assert data.id == payload["files"][0]["resource_id"]
     assert data.source.media_type == "image/png"
@@ -111,7 +118,8 @@ async def test_text_status_and_list_never_expose_local_paths(tmp_path):
 
 @pytest.mark.asyncio
 async def test_non_codex_active_provider_cannot_send_image_data(
-    reset_image_tasks, monkeypatch
+    reset_image_tasks,
+    monkeypatch,
 ):
     monkeypatch.setattr(image_module, "_active_provider_id", lambda: "openai")
 
@@ -131,7 +139,7 @@ async def test_completed_identical_request_generates_again(reset_image_tasks):
     payload = json.loads(
         next(
             block for block in second.content if isinstance(block, TextBlock)
-        ).text
+        ).text,
     )
     assert payload["reused"] is False
     assert len(first.content) == len(second.content)
@@ -163,12 +171,12 @@ async def test_only_running_identical_requests_are_coalesced(monkeypatch):
                 block
                 for block in result.content
                 if isinstance(block, TextBlock)
-            ).text
+            ).text,
         )
         for result in results
     ]
     assert {payload["task_id"] for payload in payloads} == {
-        payloads[0]["task_id"]
+        payloads[0]["task_id"],
     }
 
 
@@ -182,16 +190,16 @@ def test_task_and_fingerprint_registries_expire():
         updated_at=0,
     )
     image_module._tasks[record.task_id] = record
-    image_module._fingerprints[(record.session_id, record.fingerprint)] = (
-        image_module._FingerprintEntry(record.task_id, created_at=0)
-    )
+    image_module._fingerprints[
+        (record.session_id, record.fingerprint)
+    ] = image_module._FingerprintEntry(record.task_id, created_at=0)
 
     image_module._sweep_registry(
         max(
             image_module.TASK_REGISTRY_TTL_SECONDS,
             image_module.FINGERPRINT_REGISTRY_TTL_SECONDS,
         )
-        + 1
+        + 1,
     )
 
     assert image_module._tasks == {}
@@ -227,7 +235,7 @@ async def test_status_list_and_edit_validation(reset_image_tasks):
             block
             for block in generated.content
             if isinstance(block, TextBlock)
-        ).text
+        ).text,
     )["task_id"]
     status = await image_tool(action="status", task_id=task_id)
     assert json.loads(status.content[0].text)["status"] == "completed"

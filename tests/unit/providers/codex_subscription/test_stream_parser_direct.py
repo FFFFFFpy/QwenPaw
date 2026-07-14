@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 import pytest
 
 from qwenpaw.providers.codex_subscription.stream_parser import (
@@ -12,9 +13,9 @@ def test_incomplete_keeps_details_and_is_not_completed_successfully():
         {
             "type": "response.incomplete",
             "response": {
-                "incomplete_details": {"reason": "max_output_tokens"}
+                "incomplete_details": {"reason": "max_output_tokens"},
             },
-        }
+        },
     )
     assert parts[0].incomplete is True
     assert parts[0].details == {"reason": "max_output_tokens"}
@@ -47,7 +48,10 @@ def test_text_reasoning_tools_usage_and_completed():
     )
     assert (
         parser.feed(
-            {"type": "response.reasoning_summary_text.delta", "delta": "think"}
+            {
+                "type": "response.reasoning_summary_text.delta",
+                "delta": "think",
+            },
         )[0].kind
         == "reasoning"
     )
@@ -61,21 +65,21 @@ def test_text_reasoning_tools_usage_and_completed():
                 "name": "lookup",
                 "arguments": "",
             },
-        }
+        },
     )
     parser.feed(
         {
             "type": "response.function_call_arguments.delta",
             "item_id": "item-1",
             "delta": '{"q":',
-        }
+        },
     )
     tool = parser.feed(
         {
             "type": "response.function_call_arguments.done",
             "item_id": "item-1",
             "arguments": '{"q":"x"}',
-        }
+        },
     )[0]
     assert (tool.kind, tool.call_id, tool.name, tool.arguments) == (
         "tool",
@@ -92,9 +96,9 @@ def test_text_reasoning_tools_usage_and_completed():
                     "output_tokens": 2,
                     "total_tokens": 6,
                     "input_tokens_details": {"cached_tokens": 1},
-                }
+                },
             },
-        }
+        },
     )
     assert parts[-1].usage == {
         "input_tokens": 4,

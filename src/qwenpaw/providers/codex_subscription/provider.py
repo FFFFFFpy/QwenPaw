@@ -1,9 +1,10 @@
+# -*- coding: utf-8 -*-
 """Built-in ChatGPT/Codex subscription provider using direct Responses SSE."""
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from agentscope.model import ChatModelBase
 from pydantic import PrivateAttr
@@ -48,9 +49,14 @@ class ChatGPTSubscriptionProvider(Provider):
                 "gpt-image-2",
             )
         }
-        saved = {model.id: model for model in self.models}
-        self.models = subscription_models()
-        for model in self.models:
+        existing_models = cast(
+            list[ModelInfo],
+            getattr(self, "models", []),
+        )
+        saved = {model.id: model for model in existing_models}
+        models = subscription_models()
+        self.models = models
+        for model in models:
             previous = saved.get(model.id)
             if previous is not None:
                 model.reasoning_effort = previous.reasoning_effort
@@ -95,7 +101,9 @@ class ChatGPTSubscriptionProvider(Provider):
         return [model.model_copy(deep=True) for model in self.models]
 
     async def check_model_connection(
-        self, model_id: str, timeout: float = 5
+        self,
+        model_id: str,
+        timeout: float = 5,
     ) -> tuple[bool, str]:
         connected, message = await self.check_connection(timeout)
         if not connected:
@@ -127,7 +135,7 @@ class ChatGPTSubscriptionProvider(Provider):
             {
                 "api_key": "",
                 "oauth_connected": bool(account_status["connected"]),
-            }
+            },
         )
         for model in data.get("models", []):
             model["availability"] = self.availability(str(model["id"]))
@@ -177,11 +185,12 @@ class ChatGPTSubscriptionProvider(Provider):
             )
         return ChatGPTSubscriptionChatModel(
             credential=CodexSubscriptionCredential(
-                id="qwenpaw-openai-codex", name="ChatGPT subscription"
+                id="qwenpaw-openai-codex",
+                name="ChatGPT subscription",
             ),
             model=model_id,
             parameters=ChatGPTSubscriptionChatModel.Parameters(
-                reasoning_effort=effort
+                reasoning_effort=effort,
             ),
             token_store=self._token_store,
             oauth_service=self._oauth,

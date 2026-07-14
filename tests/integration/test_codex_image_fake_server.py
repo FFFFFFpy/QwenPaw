@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Real-httpx image generation against a local fake Responses SSE server."""
 
 import asyncio
@@ -31,7 +32,8 @@ async def test_image_generation_over_real_sse_transport(tmp_path):
     received = {}
 
     async def handler(
-        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+        reader: asyncio.StreamReader,
+        writer: asyncio.StreamWriter,
     ):
         request_line = (await reader.readline()).decode()
         headers = {}
@@ -68,7 +70,7 @@ async def test_image_generation_over_real_sse_transport(tmp_path):
             + b"Content-Length: "
             + str(len(sse)).encode()
             + b"\r\nConnection: close\r\n\r\n"
-            + sse
+            + sse,
         )
         await writer.drain()
         writer.close()
@@ -84,7 +86,7 @@ async def test_image_generation_over_real_sse_transport(tmp_path):
             account_id="account",
             expires_at=time.time() + 3600,
             last_refresh_at=time.time(),
-        )
+        ),
     )
     async with server, httpx.AsyncClient() as client:
         service = ImageGenerationService(

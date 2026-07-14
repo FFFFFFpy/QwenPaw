@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Hardened HTTP transport for the Codex Responses compatibility endpoint."""
 
 from __future__ import annotations
@@ -84,14 +85,18 @@ class CodexResponsesHTTPClient:
             headers["x-openai-internal-codex-responses-lite"] = "true"
         try:
             async with client.stream(
-                "POST", self.endpoint, headers=headers, json=body
+                "POST",
+                self.endpoint,
+                headers=headers,
+                json=body,
             ) as response:
                 if response.status_code >= 300:
                     raise error_for_status(response.status_code)
                 yield response
         except httpx.HTTPError as exc:
             raise CodexTransportError(
-                "CODEX_NETWORK", "Unable to connect to ChatGPT"
+                "CODEX_NETWORK",
+                "Unable to connect to ChatGPT",
             ) from exc
         finally:
             if own:

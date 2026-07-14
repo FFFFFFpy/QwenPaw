@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 from pathlib import Path
 
 
@@ -67,7 +68,8 @@ replace_once(
 capping = Path("src/qwenpaw/providers/capping_formatter.py")
 capping_text = capping.read_text(encoding="utf-8")
 capping_text = capping_text.replace(
-    "flush_content()", "flush_content(content, msg.role)"
+    "flush_content()",
+    "flush_content(content, msg.role)",
 )
 capping.write_text(capping_text, encoding="utf-8")
 
@@ -111,13 +113,13 @@ disables = {
         "too-many-statements",
     ],
     "src/qwenpaw/providers/codex_subscription/image_generation.py": [
-        "too-many-branches"
+        "too-many-branches",
     ],
     "src/qwenpaw/providers/codex_subscription/stream_parser.py": [
-        "too-many-branches"
+        "too-many-branches",
     ],
     "tests/integration/test_codex_direct_fake_server.py": [
-        "pointless-statement"
+        "pointless-statement",
     ],
     "tests/unit/agents/tools/test_image_generate.py": [
         "reimported",
@@ -126,7 +128,7 @@ disables = {
         "redefined-outer-name",
     ],
     "tests/unit/app/routers/test_codex_subscription_router.py": [
-        "protected-access"
+        "protected-access",
     ],
     "tests/unit/app/test_local_workspace_privacy.py": ["protected-access"],
     "tests/unit/providers/codex_subscription/test_direct_chat_model.py": [
@@ -135,16 +137,16 @@ disables = {
         "unreachable",
     ],
     "tests/unit/providers/codex_subscription/test_image_generation.py": [
-        "protected-access"
+        "protected-access",
     ],
     "tests/unit/providers/codex_subscription/test_oauth_direct.py": [
-        "protected-access"
+        "protected-access",
     ],
     "tests/unit/providers/codex_subscription/test_provider_direct.py": [
-        "protected-access"
+        "protected-access",
     ],
     "tests/unit/providers/codex_subscription/test_token_store_direct.py": [
-        "use-dict-literal"
+        "use-dict-literal",
     ],
     "tests/unit/utils/test_http.py": ["unused-argument"],
 }

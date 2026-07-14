@@ -1,3 +1,6 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=too-many-branches
+# pylint: disable=too-many-statements
 """QwenPaw-native ChatModel using the direct Codex Responses SSE route."""
 
 from __future__ import annotations
@@ -83,7 +86,8 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
         if effort is None:
             effort = getattr(self.parameters, "reasoning_effort", None)
         structured = generate_kwargs.pop(
-            "response_format", None
+            "response_format",
+            None,
         ) or generate_kwargs.pop("structured_format", None)
         formatted = await self.formatter.format(messages)
         body = self.mapper.build_request(
@@ -95,7 +99,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
             relay_reasoning=self.relay_reasoning,
             structured_format=structured,
             parallel_tool_calls=bool(
-                generate_kwargs.pop("parallel_tool_calls", True)
+                generate_kwargs.pop("parallel_tool_calls", True),
             ),
         )
         stream = self._stream_response(body)
@@ -111,7 +115,8 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
         return collected
 
     async def _stream_response(
-        self, body: dict[str, Any]
+        self,
+        body: dict[str, Any],
     ) -> AsyncGenerator[ChatResponse, None]:
         started = time.monotonic()
         # AgentScope uses block IDs to decide whether a streamed delta extends
@@ -122,7 +127,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
         refreshed_after_401 = False
         while True:
             record = await self.token_store.get_valid(
-                self.oauth_service.refresh
+                self.oauth_service.refresh,
             )
             emitted_any = False
             emitted_tool_call = False
@@ -156,7 +161,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                         TextBlock(
                                             id=text_block_id,
                                             text=part.text,
-                                        )
+                                        ),
                                     ],
                                     is_last=False,
                                 )
@@ -173,7 +178,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                         ThinkingBlock(
                                             id=reasoning_block_id,
                                             thinking=part.text,
-                                        )
+                                        ),
                                     ],
                                     is_last=False,
                                 )
@@ -188,7 +193,7 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                                             id=part.call_id,
                                             name=part.name,
                                             input=part.arguments,
-                                        )
+                                        ),
                                     ],
                                     is_last=False,
                                 )
@@ -239,7 +244,8 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                         "retry disabled",
                     ) from exc
                 raise CodexTransportError(
-                    "CODEX_NETWORK", "Unable to connect to ChatGPT"
+                    "CODEX_NETWORK",
+                    "Unable to connect to ChatGPT",
                 ) from exc
             except CodexSubscriptionError as exc:
                 if (
@@ -247,7 +253,8 @@ class ChatGPTSubscriptionChatModel(ChatModelBase):
                     and self.availability_callback
                 ):
                     self.availability_callback(
-                        str(body["model"]), "unavailable"
+                        str(body["model"]),
+                        "unavailable",
                     )
                 if (
                     exc.status_code == 401

@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=too-many-branches
 """Incremental SSE and Codex Responses event parser."""
 
 from __future__ import annotations
@@ -28,7 +30,7 @@ async def iter_sse_events(
                     value = json.loads(payload)
                 except ValueError as exc:
                     raise CodexProtocolError(
-                        "ChatGPT returned invalid streaming data"
+                        "ChatGPT returned invalid streaming data",
                     ) from exc
                 if isinstance(value, dict):
                     yield value
@@ -44,7 +46,7 @@ async def iter_sse_events(
                 value = json.loads(payload)
             except ValueError as exc:
                 raise CodexProtocolError(
-                    "ChatGPT returned invalid streaming data"
+                    "ChatGPT returned invalid streaming data",
                 ) from exc
             if isinstance(value, dict):
                 yield value
@@ -74,11 +76,11 @@ class ResponsesStreamParser:
         usage = self._usage(event)
         if event_type == "response.output_text.delta":
             parts.append(
-                StreamPart("text", text=str(event.get("delta") or ""))
+                StreamPart("text", text=str(event.get("delta") or "")),
             )
         elif event_type == "response.reasoning_summary_text.delta":
             parts.append(
-                StreamPart("reasoning", text=str(event.get("delta") or ""))
+                StreamPart("reasoning", text=str(event.get("delta") or "")),
             )
         elif event_type in {
             "response.output_item.added",
@@ -94,11 +96,11 @@ class ResponsesStreamParser:
                     item.get("id")
                     or item.get("call_id")
                     or event.get("item_id")
-                    or len(self._order)
+                    or len(self._order),
                 )
                 call = self._ensure(key)
                 call["call_id"] = str(
-                    item.get("call_id") or call["call_id"] or key
+                    item.get("call_id") or call["call_id"] or key,
                 )
                 call["name"] = str(item.get("name") or call["name"])
                 if item.get("arguments") is not None:
@@ -113,11 +115,11 @@ class ResponsesStreamParser:
                 event.get("item_id")
                 or event.get("call_id")
                 or event.get("output_index")
-                or "0"
+                or "0",
             )
             call = self._ensure(key)
             call["call_id"] = str(
-                event.get("call_id") or call["call_id"] or key
+                event.get("call_id") or call["call_id"] or key,
             )
             call["name"] = str(event.get("name") or call["name"])
             if event_type.endswith("delta"):
@@ -149,11 +151,12 @@ class ResponsesStreamParser:
                         if isinstance(incomplete_details, dict)
                         else None
                     ),
-                )
+                ),
             )
         elif event_type:
             logger.debug(
-                "Ignoring unknown Codex Responses event type=%s", event_type
+                "Ignoring unknown Codex Responses event type=%s",
+                event_type,
             )
         if usage:
             parts.append(StreamPart("usage", usage=usage))
@@ -178,7 +181,7 @@ class ResponsesStreamParser:
                 call_id=call["call_id"] or key,
                 name=call["name"],
                 arguments=call["arguments"] or "{}",
-            )
+            ),
         ]
 
     @staticmethod
@@ -196,11 +199,11 @@ class ResponsesStreamParser:
         )
         return {
             "input_tokens": int(
-                usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0
+                usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0,
             ),
             "output_tokens": int(
                 usage.get("output_tokens", usage.get("completion_tokens", 0))
-                or 0
+                or 0,
             ),
             "total_tokens": int(usage.get("total_tokens", 0) or 0),
             "cached_tokens": (

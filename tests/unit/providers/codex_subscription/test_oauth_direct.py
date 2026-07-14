@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=protected-access
 import base64
 import hashlib
 import time
@@ -45,7 +47,7 @@ async def test_manual_callback_rejects_wrong_host(tmp_path):
         await service.complete(
             callback_url=(
                 "https://evil.example/auth/callback?code=x&state=" + state
-            )
+            ),
         )
 
 
@@ -56,9 +58,9 @@ async def test_user_denial_records_failed_terminal_state(tmp_path):
     with pytest.raises(CodexSubscriptionError):
         await service.complete(
             callback_url=(
-                "http://localhost:1455/auth/callback?error=access_denied&state="
-                + state
-            )
+                "http://localhost:1455/auth/callback"
+                "?error=access_denied&state=" + state
+            ),
         )
     status = service.login_status(state)
     assert status["status"] == "failed"

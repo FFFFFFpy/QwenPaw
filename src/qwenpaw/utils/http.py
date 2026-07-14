@@ -31,7 +31,10 @@ class SSRFSafeResolver(aiohttp.abc.AbstractResolver):
         self._getaddrinfo = getaddrinfo
 
     async def resolve(
-        self, host: str, port: int = 0, family: int = socket.AF_UNSPEC
+        self,
+        host: str,
+        port: int = 0,
+        family: int = socket.AF_UNSPEC,
     ) -> list[dict[str, Any]]:
         resolver = self._getaddrinfo
         if resolver is None:
@@ -45,7 +48,7 @@ class SSRFSafeResolver(aiohttp.abc.AbstractResolver):
             )
         except OSError as exc:
             raise SSRFSafeRequestError(
-                "Remote host could not be resolved"
+                "Remote host could not be resolved",
             ) from exc
 
         results: list[dict[str, Any]] = []
@@ -56,11 +59,11 @@ class SSRFSafeResolver(aiohttp.abc.AbstractResolver):
                 ip = ipaddress.ip_address(address)
             except ValueError as exc:
                 raise SSRFSafeRequestError(
-                    "Remote host resolved to an invalid address"
+                    "Remote host resolved to an invalid address",
                 ) from exc
             if not ip.is_global:
                 raise SSRFSafeRequestError(
-                    "Remote host resolved to a non-public address"
+                    "Remote host resolved to a non-public address",
                 )
             key = (str(ip), port)
             if key in seen:
@@ -72,13 +75,11 @@ class SSRFSafeResolver(aiohttp.abc.AbstractResolver):
                     "host": str(ip),
                     "port": port,
                     "family": (
-                        socket.AF_INET6
-                        if ip.version == 6
-                        else socket.AF_INET
+                        socket.AF_INET6 if ip.version == 6 else socket.AF_INET
                     ),
                     "proto": 0,
                     "flags": 0,
-                }
+                },
             )
         if not results:
             raise SSRFSafeRequestError("Remote host did not resolve")
@@ -135,34 +136,34 @@ async def download_ssrf_safe(
                         location = response.headers.get("Location")
                         if not location or redirect_count >= max_redirects:
                             raise SSRFSafeRequestError(
-                                "Remote redirect is invalid or too deep"
+                                "Remote redirect is invalid or too deep",
                             )
                         current = urljoin(current, location)
                         continue
                     if response.status != 200:
                         raise SSRFSafeRequestError(
-                            "Remote resource could not be downloaded"
+                            "Remote resource could not be downloaded",
                         )
                     content_length = response.headers.get("Content-Length")
                     if content_length:
                         try:
                             if int(content_length) > max_bytes:
                                 raise SSRFSafeRequestError(
-                                    "Remote resource is too large"
+                                    "Remote resource is too large",
                                 )
                         except ValueError as exc:
                             raise SSRFSafeRequestError(
-                                "Remote content length is invalid"
+                                "Remote content length is invalid",
                             ) from exc
                     chunks: list[bytes] = []
                     size = 0
                     async for chunk in response.content.iter_chunked(
-                        64 * 1024
+                        64 * 1024,
                     ):
                         size += len(chunk)
                         if size > max_bytes:
                             raise SSRFSafeRequestError(
-                                "Remote resource is too large"
+                                "Remote resource is too large",
                             )
                         chunks.append(chunk)
                     return b"".join(chunks)
@@ -170,7 +171,7 @@ async def download_ssrf_safe(
         raise
     except (aiohttp.ClientError, asyncio.TimeoutError) as exc:
         raise SSRFSafeRequestError(
-            "Remote resource could not be downloaded"
+            "Remote resource could not be downloaded",
         ) from exc
     finally:
         if not connector.closed:

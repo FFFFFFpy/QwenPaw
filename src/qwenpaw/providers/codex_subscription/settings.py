@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Versioned non-secret settings for the subscription compatibility route."""
 
 from __future__ import annotations
@@ -34,7 +35,8 @@ class ImageModelSettings(BaseModel):
     quality: str = Field(default="auto", pattern="^(auto|low|medium|high)$")
     output_format: str = Field(default="png", pattern="^(png|jpeg|webp)$")
     background: str = Field(
-        default="auto", pattern="^(auto|opaque|transparent)$"
+        default="auto",
+        pattern="^(auto|opaque|transparent)$",
     )
     count: int = Field(default=1, ge=1, le=4)
 
@@ -42,7 +44,7 @@ class ImageModelSettings(BaseModel):
     def validate_format_background(self) -> "ImageModelSettings":
         if self.output_format == "jpeg" and self.background == "transparent":
             raise ValueError(
-                "JPEG output does not support a transparent background"
+                "JPEG output does not support a transparent background",
             )
         return self
 
@@ -63,10 +65,10 @@ class CodexSubscriptionSettings(BaseModel):
     version: int = SETTINGS_VERSION
     transport: str = "direct"
     chat_models: dict[str, ChatModelSettings] = Field(
-        default_factory=_default_chat_models
+        default_factory=_default_chat_models,
     )
     image_models: dict[str, ImageModelSettings] = Field(
-        default_factory=_default_image_models
+        default_factory=_default_image_models,
     )
 
     @classmethod
@@ -153,7 +155,8 @@ class CodexSubscriptionSettings(BaseModel):
 
 def direct_transport_enabled() -> bool:
     return os.getenv(
-        "QWENPAW_OPENAI_CODEX_DIRECT_ENABLED", "true"
+        "QWENPAW_OPENAI_CODEX_DIRECT_ENABLED",
+        "true",
     ).lower() not in {
         "0",
         "false",

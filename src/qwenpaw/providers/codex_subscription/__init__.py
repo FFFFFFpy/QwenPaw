@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """ChatGPT/Codex subscription compatibility provider."""
 
 from .chat_model import (

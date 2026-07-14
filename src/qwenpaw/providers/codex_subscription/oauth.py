@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Authorization Code + PKCE flow for the ChatGPT/Codex compatibility route."""
 
 from __future__ import annotations
@@ -73,7 +74,9 @@ def mask_email(email: str | None) -> str | None:
 
 class OAuthService:
     def __init__(
-        self, store: TokenStore, client: httpx.AsyncClient | None = None
+        self,
+        store: TokenStore,
+        client: httpx.AsyncClient | None = None,
     ) -> None:
         self.store = store
         self.client = client
@@ -86,7 +89,8 @@ class OAuthService:
         verifier = create_code_verifier()
         state = secrets.token_urlsafe(32)
         self._pending[state] = _PendingState(
-            verifier=verifier, created_at=time.time()
+            verifier=verifier,
+            created_at=time.time(),
         )
         self._results[state] = "pending"
         try:
@@ -107,7 +111,7 @@ class OAuthService:
                 "codex_cli_simplified_flow": "true",
                 "state": state,
                 "originator": "codex_cli_rs",
-            }
+            },
         )
         return {
             "authorize_url": f"{OAUTH_AUTHORIZE_URL}?{query}",
@@ -183,7 +187,8 @@ class OAuthService:
 
     async def _listen_once(self) -> None:
         async def callback(
-            reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+            reader: asyncio.StreamReader,
+            writer: asyncio.StreamWriter,
         ) -> None:
             success = False
             try:
@@ -198,7 +203,7 @@ class OAuthService:
                         break
                 if target.startswith("/auth/callback?"):
                     await self.complete(
-                        callback_url=f"http://localhost:1455{target}"
+                        callback_url=f"http://localhost:1455{target}",
                     )
                     success = True
             except Exception:
@@ -217,7 +222,7 @@ class OAuthService:
                 + b"Content-Length: "
                 + str(len(body)).encode()
                 + b"\r\nConnection: close\r\n\r\n"
-                + body
+                + body,
             )
             await writer.drain()
             writer.close()
@@ -230,7 +235,8 @@ class OAuthService:
         async with server:
             try:
                 await asyncio.wait_for(
-                    server.serve_forever(), STATE_TTL_SECONDS
+                    server.serve_forever(),
+                    STATE_TTL_SECONDS,
                 )
             except (asyncio.TimeoutError, asyncio.CancelledError):
                 pass
@@ -264,7 +270,8 @@ class OAuthService:
         if data.get("id_token"):
             record.id_token = str(data["id_token"])
         account_id = account_id_from_tokens(
-            record.id_token.get_secret_value(), access
+            record.id_token.get_secret_value(),
+            access,
         )
         if account_id:
             record.account_id = account_id
@@ -274,11 +281,16 @@ class OAuthService:
         return record
 
     async def _token_request(
-        self, payload: dict[str, str], *, form: bool
+        self,
+        payload: dict[str, str],
+        *,
+        form: bool,
     ) -> dict[str, Any]:
         own = self.client is None
         client = self.client or httpx.AsyncClient(
-            timeout=30, trust_env=True, follow_redirects=False
+            timeout=30,
+            trust_env=True,
+            follow_redirects=False,
         )
         try:
             response = await client.post(
@@ -289,7 +301,8 @@ class OAuthService:
             )
         except httpx.HTTPError as exc:
             raise CodexSubscriptionError(
-                "CODEX_NETWORK", "Unable to connect to ChatGPT authentication"
+                "CODEX_NETWORK",
+                "Unable to connect to ChatGPT authentication",
             ) from exc
         finally:
             if own:

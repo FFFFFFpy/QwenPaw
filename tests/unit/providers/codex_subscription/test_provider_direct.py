@@ -1,3 +1,5 @@
+# -*- coding: utf-8 -*-
+# pylint: disable=protected-access
 from agentscope.formatter import OpenAIResponseFormatter
 import pytest
 

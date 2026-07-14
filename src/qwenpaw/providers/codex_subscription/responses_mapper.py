@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """Build the Codex compatibility envelope around formatted Responses items."""
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ class ResponsesMapper:
                     "parallel_tool_calls": (
                         False if responses_lite else parallel_tool_calls
                     ),
-                }
+                },
             )
         elif responses_lite:
             # Required by the Lite endpoint even when the request has no
@@ -73,14 +74,17 @@ class ResponsesMapper:
             body.setdefault("reasoning", {})["context"] = "all_turns"
         if structured_format:
             body["text"] = {
-                "format": self._structured_format(structured_format)
+                "format": self._structured_format(structured_format),
             }
         encoded = json.dumps(
-            body, ensure_ascii=False, separators=(",", ":")
+            body,
+            ensure_ascii=False,
+            separators=(",", ":"),
         ).encode()
         if len(encoded) > self.max_request_bytes:
             raise CodexSubscriptionError(
-                "CODEX_REQUEST_TOO_LARGE", "The ChatGPT request is too large"
+                "CODEX_REQUEST_TOO_LARGE",
+                "The ChatGPT request is too large",
             )
         return body
 
@@ -98,9 +102,10 @@ class ResponsesMapper:
                     "name": name,
                     "description": fn.get("description", ""),
                     "parameters": fn.get(
-                        "parameters", {"type": "object", "properties": {}}
+                        "parameters",
+                        {"type": "object", "properties": {}},
                     ),
-                }
+                },
             )
         return mapped
 
