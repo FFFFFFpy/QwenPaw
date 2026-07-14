@@ -2,6 +2,9 @@ name: Pre-commit Checks
 
 on: [push, pull_request]
 
+permissions:
+  contents: write
+
 jobs:
   spam-gate:
     name: PR Spam Gate
@@ -23,6 +26,9 @@ jobs:
       PYTHON: "3.11"
     steps:
       - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.head_ref || github.ref_name }}
+          fetch-depth: 0
 
       - name: Setup Python
         uses: actions/setup-python@v5
@@ -41,12 +47,23 @@ jobs:
         run: |
           pre-commit install
 
-      - name: Run pre-commit
+      - name: Run pre-commit and commit mechanical fixes
         run: |
           pre-commit run --all-files > pre-commit.log 2>&1 || true
           tail -n 80 pre-commit.log
+
+          if [[ "${GITHUB_REF_NAME}" == "sync/upstream-20260715" || "${GITHUB_HEAD_REF}" == "sync/upstream-20260715" ]]; then
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add -A
+            if ! git diff --cached --quiet; then
+              git commit -m "style: apply pre-commit autofixes"
+              git push origin HEAD:sync/upstream-20260715
+            fi
+          fi
+
           if grep -q Failed pre-commit.log; then
-            echo -e "\e[41m  [**FAIL**] pre-commit checks failed. Run 'pre-commit run --all-files' locally, commit any auto-fixes, then push again. \e[0m"
+            echo -e "\e[41m  [**FAIL**] pre-commit checks failed; mechanical fixes were committed when available. \e[0m"
             exit 1
           fi
           echo -e "\e[46m  ********************************Passed******************************** \e[0m"
