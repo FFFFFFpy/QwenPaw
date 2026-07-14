@@ -43,9 +43,18 @@ jobs:
 
       - name: Run pre-commit
         run: |
-          pre-commit run --all-files 2>&1 | tee pre-commit.log || true
+          pre-commit run --all-files > pre-commit.log 2>&1 || true
+          tail -n 80 pre-commit.log
           if grep -q Failed pre-commit.log; then
             echo -e "\e[41m  [**FAIL**] pre-commit checks failed. Run 'pre-commit run --all-files' locally, commit any auto-fixes, then push again. \e[0m"
             exit 1
           fi
           echo -e "\e[46m  ********************************Passed******************************** \e[0m"
+
+      - name: Upload pre-commit log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: pre-commit-log
+          path: pre-commit.log
+          if-no-files-found: error
