@@ -9,11 +9,6 @@
 # AI agent / copilot local config
 .aone_copilot/
 .agents/
-.qwenpaw.secret/
-.copaw.secret/
-resources/sessions/
-**/codex_subscription/oauth.enc
-**/.master_key
 
 # dependencies
 /.pnp
@@ -29,6 +24,7 @@ htmlcov/
 htmlcov.zip
 htmlcov-integration/
 .integration_coverage/
+**/.creator-dev-runtime/
 
 # cookbook
 cookbook/_build
@@ -154,3 +150,14 @@ e2e/__pycache__/
 graphify-out/
 local-docs/
 docs-site/
+
+# Local review notes
+docs/reviews/
+tmp/
+
+# Codex subscription / local secrets
+.qwenpaw.secret/
+.copaw.secret/
+resources/sessions/
+**/codex_subscription/oauth.enc
+**/.master_key

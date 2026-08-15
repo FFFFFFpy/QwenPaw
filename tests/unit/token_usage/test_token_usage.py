@@ -146,6 +146,24 @@ class TestStorage:
         save_data_sync(path, {"test": "data"})
         assert path.exists()
 
+    def test_save_data_sync_returns_false_on_oserror(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Transient atomic-write failure must report False."""
+        path = tmp_path / "token_usage.json"
+
+        def _boom(*_args, **_kwargs):
+            raise OSError("simulated replace failure")
+
+        monkeypatch.setattr(
+            "qwenpaw.token_usage.storage.os.replace",
+            _boom,
+        )
+        assert save_data_sync(path, {"test": "data"}) is False
+        assert not path.exists()
+
 
 # =============================================================================
 # Test TokenUsageBuffer
@@ -202,10 +220,135 @@ class TestTokenUsageBuffer:
         assert entry["prompt_tokens"] == 300
         assert entry["call_count"] == 3
 
+    @pytest.mark.asyncio
+    async def test_stop_does_not_wipe_history_when_seed_interrupted(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """A stop() that races cache seeding must not clobber the file."""
+        path = tmp_path / "test.json"
+        existing = {
+            "2026-04-24": {
+                "openai:gpt-4": {
+                    "provider_id": "openai",
+                    "model_name": "gpt-4",
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "call_count": 1,
+                },
+            },
+        }
+        path.write_text(json.dumps(existing), encoding="utf-8")
 
-# =============================================================================
-# Test Pydantic Models
-# =============================================================================
+        seeding = asyncio.Event()
+
+        async def _never_returns(_path):
+            # Park the consumer inside the seed so stop() runs while
+            # ``_disk_cache`` is still the initial empty dict.
+            seeding.set()
+            await asyncio.Event().wait()
+            return {}
+
+        monkeypatch.setattr(
+            "qwenpaw.token_usage.buffer.load_data",
+            _never_returns,
+        )
+
+        buffer = TokenUsageBuffer(path, flush_interval=3600)
+        buffer.start()
+        await asyncio.wait_for(seeding.wait(), timeout=1)
+        await buffer.stop()
+
+        assert json.loads(path.read_text(encoding="utf-8")) == existing
+
+    @pytest.mark.asyncio
+    async def test_stop_flushes_after_seed_completes(self, tmp_path):
+        """Normal shutdown still merges new events into stored history."""
+        path = tmp_path / "test.json"
+        path.write_text(
+            json.dumps(
+                {
+                    "2026-04-23": {
+                        "openai:gpt-4": {
+                            "provider_id": "openai",
+                            "model_name": "gpt-4",
+                            "prompt_tokens": 7,
+                            "completion_tokens": 3,
+                            "call_count": 1,
+                        },
+                    },
+                },
+            ),
+            encoding="utf-8",
+        )
+
+        buffer = TokenUsageBuffer(path, flush_interval=3600)
+        buffer.start()
+        buffer.enqueue(
+            _UsageEvent(
+                provider_id="openai",
+                model_name="gpt-4",
+                prompt_tokens=100,
+                completion_tokens=50,
+                date_str="2026-04-24",
+                now_iso="2026-04-24T10:00:00+00:00",
+            ),
+        )
+        await buffer.stop()
+
+        written = json.loads(path.read_text(encoding="utf-8"))
+        assert written["2026-04-23"]["openai:gpt-4"]["prompt_tokens"] == 7
+        assert written["2026-04-24"]["openai:gpt-4"]["prompt_tokens"] == 100
+
+    @pytest.mark.asyncio
+    async def test_flush_retries_after_transient_write_failure(
+        self,
+        tmp_path,
+        monkeypatch,
+    ):
+        """Failed flush must keep dirty so the next flush retries (#6374)."""
+        path = tmp_path / "token_usage.json"
+        buffer = TokenUsageBuffer(path, flush_interval=3600)
+        buffer._cache_loaded = True
+        buffer._disk_cache = {
+            "2026-04-24": {
+                "openai:gpt-4": {
+                    "provider_id": "openai",
+                    "model_name": "gpt-4",
+                    "prompt_tokens": 100,
+                    "completion_tokens": 50,
+                    "call_count": 1,
+                },
+            },
+        }
+        buffer._dirty = True
+
+        real_replace = __import__("os").replace
+        calls = {"n": 0}
+
+        def _flaky_replace(src, dst, *args, **kwargs):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise OSError("simulated replace failure")
+            return real_replace(src, dst, *args, **kwargs)
+
+        monkeypatch.setattr(
+            "qwenpaw.token_usage.storage.os.replace",
+            _flaky_replace,
+        )
+
+        await buffer._flush_once()
+        assert buffer._dirty is True
+        assert not path.exists()
+        assert calls["n"] == 1
+
+        await buffer._flush_once()
+        assert path.exists()
+        assert buffer._dirty is False
+        assert calls["n"] == 2
+        written = json.loads(path.read_text(encoding="utf-8"))
+        assert written["2026-04-24"]["openai:gpt-4"]["prompt_tokens"] == 100
 
 
 class TestTokenUsageStats:

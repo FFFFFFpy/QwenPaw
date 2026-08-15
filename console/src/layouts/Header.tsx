@@ -13,12 +13,12 @@ import LanguageSwitcher, {
   LANGUAGE_LIST,
 } from "../components/LanguageSwitcher/index";
 import ThemeToggleButton from "../components/ThemeToggleButton";
-import CodingModeToggle from "../components/CodingModeToggle";
 import { useTranslation } from "react-i18next";
 import { Button, Modal } from "@agentscope-ai/design";
 import styles from "./index.module.less";
 import api from "../api";
 import { openExternalLink } from "../utils/openExternalLink";
+import { ExternalMarkdownLink } from "../components/Markdown/externalLinkComponents";
 import {
   GITHUB_URL,
   getDocsUrl,
@@ -207,6 +207,11 @@ export default function Header() {
       label: t("header.faq"),
       onClick: () => handleNavClick(getFaqUrl(i18n.language)),
     },
+  ];
+
+  // The standalone GitHub button is hidden on mobile, so the entry is only
+  // surfaced inside the mobile menu to avoid a duplicated link on desktop.
+  const githubMenuItem: MenuProps["items"] = [
     {
       key: "github",
       icon: <GithubOutlined />,
@@ -251,6 +256,7 @@ export default function Header() {
     },
     { type: "divider" },
     ...resourcesMenuItems,
+    ...githubMenuItem,
   ];
 
   const handleOpenUpdateModal = () => {
@@ -449,10 +455,6 @@ export default function Header() {
           </Tooltip>
           <div className={styles.headerDivider} />
           <span className={styles.hideOnMobile}>
-            <CodingModeToggle />
-          </span>
-          <div className={styles.headerDivider} />
-          <span className={styles.hideOnMobile}>
             <LanguageSwitcher />
           </span>
           <span className={styles.hideOnMobile}>
@@ -526,21 +528,7 @@ export default function Header() {
             <ReactMarkdown
               remarkPlugins={[remarkGfm]}
               components={{
-                a({ href, children, ...props }: any) {
-                  return (
-                    <a
-                      {...props}
-                      href={href}
-                      onClick={(e) => {
-                        e.preventDefault();
-                        if (href) handleNavClick(href);
-                      }}
-                      style={{ cursor: "pointer" }}
-                    >
-                      {children}
-                    </a>
-                  );
-                },
+                a: ExternalMarkdownLink,
                 code({ node, className, children, ...props }: any) {
                   const match = /language-(\w+)/.exec(className || "");
                   const isBlock =

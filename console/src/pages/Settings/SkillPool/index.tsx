@@ -34,6 +34,7 @@ import styles from "./index.module.less";
 function SkillPoolPage() {
   const { t } = useTranslation();
   const pool = useSkillPool();
+  const { handleRefresh } = pool;
   const builtinNoticeLines = getBuiltinNoticeLines(pool.builtinNotice, t);
   const {
     visibleItems: visibleSkills,
@@ -60,6 +61,10 @@ function SkillPoolPage() {
     });
   }, [setSearchParams]);
 
+  const handleMarketInstalled = useCallback(() => {
+    void handleRefresh();
+  }, [handleRefresh]);
+
   if (marketView) {
     return (
       <div className={styles.skillsPage}>
@@ -75,7 +80,7 @@ function SkillPoolPage() {
             </Button>
           }
         />
-        <MarketPanel installTarget="pool" />
+        <MarketPanel installTarget="pool" onInstalled={handleMarketInstalled} />
       </div>
     );
   }
@@ -330,6 +335,8 @@ function SkillPoolPage() {
       <PoolSkillDrawer
         mode={pool.mode}
         activeSkill={pool.activeSkill}
+        loading={pool.detailLoading}
+        skillName={pool.detailSkillName}
         form={pool.form}
         drawerContent={pool.drawerContent}
         showMarkdown={pool.showMarkdown}

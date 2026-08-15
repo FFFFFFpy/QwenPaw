@@ -3,16 +3,17 @@ from __future__ import annotations
 
 import logging
 import os
-import sys
 
 import click
 import uvicorn
 
 from ..app.auth import is_auth_enabled
+from ..browser.control_link.chrome.protocol import NM_MAX_INBOUND_BYTES
 from ..config.utils import write_last_api
 from ..constant import LOG_LEVEL_ENV
 from ..utils.http import is_loopback_host
 from ..utils.logging import SuppressPathAccessLogFilter, setup_logger
+from ..utils.platform import warn_unelevated_sandbox
 
 logger = logging.getLogger(__name__)
 
@@ -98,36 +99,13 @@ def app_cmd(
     hide_access_paths: tuple[str, ...],
 ) -> None:
     """Run QwenPaw FastAPI app."""
-    if sys.platform == "win32":
-        import ctypes
-
-        if not ctypes.windll.shell32.IsUserAnAdmin():
-            argv0 = os.path.abspath(sys.argv[0])
-            args_str = " ".join(
-                f'"{a}"' if " " in a else a for a in sys.argv[1:]
-            )
-            if argv0.lower().endswith((".py", ".pyw")):
-                program = sys.executable
-                params = f'"{argv0}" {args_str}'
-            else:
-                program = argv0
-                params = args_str
-            ret = ctypes.windll.shell32.ShellExecuteW(
-                None,
-                "runas",
-                program,
-                params,
-                None,
-                1,
-            )
-            if ret <= 32:
-                click.echo(
-                    "Failed to elevate privileges via UAC. "
-                    "Please run as administrator.",
-                    err=True,
-                )
-                sys.exit(1)
-            sys.exit(0)
+    # NOTE: the server intentionally runs UNPRIVILEGED. The Windows
+    # restricted-token sandbox no longer requires the whole server to be
+    # elevated (which PR #5931 forced via ShellExecuteW("runas"), breaking
+    # headless / VBS launchers with a surprise UAC prompt and a detached,
+    # un-closable window). If sandbox is enabled but the process is not
+    # admin, warn_unelevated_sandbox() below will log a warning about
+    # reduced isolation before the server starts.
 
     # Handle deprecated --workers parameter
     if workers is not None:
@@ -149,13 +127,8 @@ def app_cmd(
     else:
         write_last_api(host, port)
     os.environ[LOG_LEVEL_ENV] = log_level
-
-    # Signal reload mode to browser_control.py for Windows
-    # compatibility: use sync Playwright + ThreadPool only when reload=True
     if reload:
         os.environ["QWENPAW_RELOAD_MODE"] = "1"
-    else:
-        os.environ.pop("QWENPAW_RELOAD_MODE", None)
 
     setup_logger(log_level)
     if log_level in ("debug", "trace"):
@@ -171,6 +144,10 @@ def app_cmd(
 
     _warn_if_auth_off_non_loopback_bind(host, port)
 
+    # On Windows without admin, warn that sandbox runs in unelevated mode
+    # with limited isolation.
+    warn_unelevated_sandbox()
+
     uvicorn.run(
         "qwenpaw.app._app:app",
         host=host,
@@ -178,4 +155,9 @@ def app_cmd(
         reload=reload,
         workers=1,
         log_level=log_level,
+        # Bound shutdown so workspace SSE connections cannot block exit.
+        timeout_graceful_shutdown=5,
+        # Chrome Native Messaging inbound limit; this server-wide value is a
+        # protocol fact rather than a user-configurable WebSocket capacity.
+        ws_max_size=NM_MAX_INBOUND_BYTES,
     )

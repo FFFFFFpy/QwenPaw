@@ -12,6 +12,7 @@ from qwenpaw.utils.http import (
     download_ssrf_safe,
     is_loopback_host,
     is_loopback_url,
+    probe_host_for_bind_host,
     trust_env_for_url,
 )
 
@@ -176,3 +177,23 @@ async def test_ssrf_download_revalidates_redirect_and_disables_proxy(
     assert captured["trust_env"] is False
     assert captured["requests"][0][1]["allow_redirects"] is False
     assert captured["requests"][0][1]["proxy"] is None
+
+
+
+@pytest.mark.parametrize(
+    "bind_host, expected",
+    [
+        ("0.0.0.0", "127.0.0.1"),
+        ("::", "::1"),
+        ("[::]", "::1"),
+        ("  ::  ", "::1"),
+        ("", "127.0.0.1"),
+        ("   ", "127.0.0.1"),
+        ("127.0.0.1", "127.0.0.1"),
+        ("[::1]", "::1"),
+        ("192.168.1.10", "192.168.1.10"),
+        ("localhost", "localhost"),
+    ],
+)
+def test_probe_host_for_bind_host(bind_host: str, expected: str) -> None:
+    assert probe_host_for_bind_host(bind_host) == expected

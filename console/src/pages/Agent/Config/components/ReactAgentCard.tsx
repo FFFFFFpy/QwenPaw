@@ -1,4 +1,5 @@
 import {
+  Button,
   Form,
   Input,
   InputNumber,
@@ -7,12 +8,23 @@ import {
   Alert,
   Switch,
 } from "@agentscope-ai/design";
+import { FolderOpen, LoaderCircle } from "lucide-react";
+import { useCallback, useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
+import { codingModeApi } from "../../../../api/modules/codingMode";
+import { projectDirectoryApi } from "../../../../api/modules/projectDirectory";
+import ProjectSelectModal from "../../../../components/ProjectSelectModal";
 import { useTimezoneOptions } from "../../../../hooks/useTimezoneOptions";
+import { MEMORY_MANAGER_BACKEND_OPTIONS } from "../../../../constants/backendMappings";
+import { useAgentStore } from "../../../../stores/agentStore";
 import {
-  CONTEXT_MANAGER_BACKEND_OPTIONS,
-  MEMORY_MANAGER_BACKEND_OPTIONS,
-} from "../../../../constants/backendMappings";
+  useCodingMode,
+  useCodingModeStore,
+} from "../../../../stores/codingModeStore";
+import {
+  useProjectDirectoryStore,
+  useProjectDir,
+} from "../../../../stores/projectDirectoryStore";
 import styles from "../index.module.less";
 
 const LANGUAGE_OPTIONS = [
@@ -29,6 +41,126 @@ interface ReactAgentCardProps {
   timezone: string;
   savingTimezone: boolean;
   onTimezoneChange: (value: string) => void;
+}
+
+function ProjectDirectorySetting() {
+  const { t } = useTranslation();
+  const selectedAgent = useAgentStore((state) => state.selectedAgent);
+  const { projectDir } = useProjectDir();
+  const setProjectDir = useProjectDirectoryStore(
+    (state) => state.setProjectDir,
+  );
+  const [projectName, setProjectName] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [modalOpen, setModalOpen] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const project = await projectDirectoryApi.get();
+      setProjectDir(
+        selectedAgent,
+        project.is_workspace_default ? null : project.path,
+      );
+      setProjectName(project.name);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedAgent, setProjectDir]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  return (
+    <>
+      <Form.Item
+        label={t("agentConfig.projectDirectoryTitle")}
+        tooltip={t("agentConfig.projectDirectoryDescription")}
+        className={styles.reactAgentWideField}
+      >
+        <div className={styles.projectDirectorySetting}>
+          <FolderOpen size={17} />
+          <div>
+            <strong>{projectName || t("codingMode.defaultWorkspace")}</strong>
+            <span>
+              {projectDir || t("agentConfig.projectDirectoryWorkspaceFallback")}
+            </span>
+          </div>
+          {loading ? (
+            <LoaderCircle className={styles.spin} size={16} />
+          ) : (
+            <Button size="small" onClick={() => setModalOpen(true)}>
+              {t("agentConfig.changeProjectDirectory")}
+            </Button>
+          )}
+        </div>
+      </Form.Item>
+      <ProjectSelectModal
+        open={modalOpen}
+        onClose={() => setModalOpen(false)}
+        onConfirm={() => {
+          setModalOpen(false);
+          void refresh();
+        }}
+      />
+    </>
+  );
+}
+
+function EnhancedCodeCapabilitySetting() {
+  const { t } = useTranslation();
+  const { codingMode } = useCodingMode();
+  const selectedAgent = useAgentStore((state) => state.selectedAgent);
+  const setCodingMode = useCodingModeStore((state) => state.setCodingMode);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      const mode = await codingModeApi.get();
+      setCodingMode(selectedAgent, mode.enabled);
+    } finally {
+      setLoading(false);
+    }
+  }, [selectedAgent, setCodingMode]);
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const toggle = async (enabled: boolean) => {
+    setSaving(true);
+    try {
+      const result = await codingModeApi.toggle(enabled);
+      setCodingMode(selectedAgent, result.enabled);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Form.Item
+      label={t("agentConfig.enhancedCodeCapability")}
+      tooltip={t("agentConfig.enhancedCodeCapabilityTooltip")}
+      className={styles.reactAgentWideField}
+    >
+      <div className={styles.switchSetting}>
+        <span>{t("agentConfig.enhancedCodeCapabilityDescription")}</span>
+        {loading ? (
+          <LoaderCircle className={styles.spin} size={16} />
+        ) : (
+          <Switch
+            checked={codingMode}
+            loading={saving}
+            onChange={(enabled) => void toggle(enabled)}
+            aria-label={t("agentConfig.enhancedCodeCapability")}
+          />
+        )}
+      </div>
+    </Form.Item>
+  );
 }
 
 export function ReactAgentCard({
@@ -120,6 +252,11 @@ export function ReactAgentCard({
         </Form.Item>
       </div>
 
+      <div className={styles.reactAgentSettings}>
+        <ProjectDirectorySetting />
+        <EnhancedCodeCapabilitySetting />
+      </div>
+
       <Form.Item
         label={t("agentConfig.autoGenerateSessionTitle")}
         name={["auto_title_config", "enabled"]}
@@ -130,39 +267,6 @@ export function ReactAgentCard({
       </Form.Item>
 
       <div className={styles.reactAgentRow}>
-        <Form.Item
-          label={t("agentConfig.contextManagerBackend")}
-          name="context_manager_backend"
-          tooltip={t("agentConfig.contextManagerBackendTooltip")}
-          className={styles.reactAgentField}
-        >
-          <Select
-            options={CONTEXT_MANAGER_BACKEND_OPTIONS}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
-
-        <Form.Item
-          label={t("agentConfig.contextStrategy")}
-          name={["light_context_config", "strategy"]}
-          tooltip={t("agentConfig.contextStrategyTooltip")}
-          className={styles.reactAgentField}
-        >
-          <Select
-            options={[
-              {
-                value: "scroll",
-                label: t("agentConfig.contextStrategyScroll"),
-              },
-              {
-                value: "native",
-                label: t("agentConfig.contextStrategyNative"),
-              },
-            ]}
-            style={{ width: "100%" }}
-          />
-        </Form.Item>
-
         <Form.Item
           label={t("agentConfig.memoryManagerBackend")}
           name="memory_manager_backend"
@@ -178,7 +282,7 @@ export function ReactAgentCard({
       <Alert
         type="warning"
         showIcon
-        message={t("agentConfig.backendRestartWarning")}
+        message={t("agentConfig.memoryManagerBackendRestartWarning")}
         style={{ marginBottom: 16 }}
       />
     </Card>

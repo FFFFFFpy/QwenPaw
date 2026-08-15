@@ -17,7 +17,10 @@ from agentscope.tool import ToolChunk
 from agentscope.message import ToolResultState
 
 from ...constant import WORKING_DIR
-from ...config.context import get_current_workspace_dir
+from ...config.context import (
+    get_current_project_dir,
+    get_current_workspace_dir,
+)
 from ...runtime.tool_registry import tool_descriptor
 from .file_io import _resolve_file_path
 
@@ -172,7 +175,11 @@ def _resolve_search_root(
     search_root = (
         Path(_resolve_file_path(path))
         if path
-        else (get_current_workspace_dir() or WORKING_DIR)
+        else (
+            get_current_project_dir()
+            or get_current_workspace_dir()
+            or WORKING_DIR
+        )
     )
     try:
         exists = search_root.exists()
@@ -593,7 +600,17 @@ def _walk_and_glob(
 # ---------------------------------------------------------------------------
 
 
-@tool_descriptor(requires_sandbox=("file_read",), async_execution=True)
+@tool_descriptor(
+    requires_sandbox=("file_read",),
+    async_execution=True,
+    tool_type="file",
+    target_param="path",
+    policy_name="Grep",
+    default_policy="allow",
+    policy_reason="Content search (global)",
+    ui_description="Search file contents by pattern",
+    ui_icon="🔍",
+)
 async def grep_search(
     pattern: str,
     path: Optional[str] = None,
@@ -666,6 +683,7 @@ async def grep_search(
         match_lines, status = await cancellable_wait(
             asyncio.to_thread(_worker),
             fallback_secs=_GREP_TIMEOUT,
+            as_kill_deadline=True,
         )
     except (asyncio.TimeoutError, asyncio.CancelledError):
         cancel.set()
@@ -705,7 +723,18 @@ async def grep_search(
     return _make_response(result)
 
 
-@tool_descriptor(requires_sandbox=("file_read",), async_execution=True)
+@tool_descriptor(
+    requires_sandbox=("file_read",),
+    async_execution=True,
+    tool_type="file",
+    target_param="path",
+    pattern_param="pattern",
+    policy_name="Glob",
+    default_policy="allow",
+    policy_reason="File listing (global)",
+    ui_description="Find files matching a glob pattern",
+    ui_icon="📁",
+)
 async def glob_search(
     pattern: str,
     path: Optional[str] = None,
@@ -741,6 +770,7 @@ async def glob_search(
         results, truncated = await cancellable_wait(
             asyncio.to_thread(_worker),
             fallback_secs=_GLOB_TIMEOUT,
+            as_kill_deadline=True,
         )
     except (asyncio.TimeoutError, asyncio.CancelledError):
         cancel.set()

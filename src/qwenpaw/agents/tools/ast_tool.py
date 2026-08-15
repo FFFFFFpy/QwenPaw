@@ -26,7 +26,10 @@ from agentscope.message import TextBlock
 from agentscope.tool import ToolChunk
 from agentscope.message import ToolResultState
 
-from ...config.context import get_current_workspace_dir
+from ...config.context import (
+    get_current_project_dir,
+    get_current_workspace_dir,
+)
 from ...constant import WORKING_DIR
 from ...runtime.tool_registry import tool_descriptor
 from .file_io import _resolve_file_path
@@ -83,7 +86,7 @@ def is_ast_grep_available() -> bool:
 
 def _resolve_root() -> Path:
     """Resolve the search base directory."""
-    workspace = get_current_workspace_dir()
+    workspace = get_current_project_dir() or get_current_workspace_dir()
     if workspace is not None:
         return workspace
     return WORKING_DIR
@@ -224,6 +227,15 @@ def _format_matches(
 @tool_descriptor(
     requires_modes=("coding",),
     requires_sandbox=("file_read",),
+    tool_type="file",
+    target_param="path",
+    pattern_param="pattern",
+    policy_name="AstSearch",
+    default_policy="allow",
+    policy_reason="AST search (global)",
+    ui_description="Search code by AST pattern (coding mode)",
+    ui_icon="🌳",
+    display_to_user=False,
 )
 async def ast_search(  # pylint: disable=too-many-return-statements
     pattern: str,
@@ -291,6 +303,7 @@ async def ast_search(  # pylint: disable=too-many-return-statements
         returncode, stdout, stderr = await cancellable_wait(
             asyncio.to_thread(_run_ast_grep_sync, args, root),
             fallback_secs=_AST_GREP_TIMEOUT + 5,
+            as_kill_deadline=True,
         )
     except (asyncio.TimeoutError, asyncio.CancelledError):
         return _make_response(

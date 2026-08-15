@@ -47,7 +47,7 @@ class QwenPawLocalWorkspace(AgentScopeLocalWorkspace):
         *,
         agent_config: Any = None,
         agent_id: str | None = None,  # pylint: disable=unused-argument
-        request_context: dict[str, str] | None = None,
+        request_context: dict[str, Any] | None = None,
         active_modes: tuple[str, ...] | set[str] = (),
         active_skills: tuple[str, ...] | set[str] = (),
         enabled_features: tuple[str, ...] | set[str] = (),
@@ -68,6 +68,17 @@ class QwenPawLocalWorkspace(AgentScopeLocalWorkspace):
                 denied.add("image_generate")
         else:
             allowed, denied = None, set()
+
+        subagent_whitelist = (request_context or {}).get(
+            "subagent_allowed_tools",
+        )
+        if isinstance(subagent_whitelist, list):
+            # Empty list means deny-all workspace tools (unlike
+            # ToolRegistry.filter, where empty allowed == unrestricted).
+            if not subagent_whitelist:
+                return []
+            sa_set = set(subagent_whitelist)
+            allowed = (allowed & sa_set) if allowed is not None else sa_set
 
         descs = self._tool_registry.filter(
             active_modes=set(active_modes),

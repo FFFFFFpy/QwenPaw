@@ -3,25 +3,25 @@
 
 State file layout follows the snarktank/ralph convention:
 
-    {workspace_dir}/missions/{loop_id}/
+    {project_dir}/.qwenpaw/missions/{loop_id}/
     ├── loop_config.json  # environment metadata (git, paths)
     ├── prd.json          # task list (worker updates ``passes``)
     ├── progress.txt      # append-only iteration log
     └── task.md           # original task description (read-only)
 
-Each loop_dir IS the working directory for that loop — fully isolated
-from other loops and the shared agent workspace.
+The loop directory stores project-local Mission state. Workers operate
+in the fixed source project recorded in ``loop_config.json``.
 """
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
 import shutil
 import time
 from pathlib import Path
 from typing import Any
 
+from ...utils.io_utils import write_json_atomic, write_text_atomic
 from ...utils.command_runner import (
     CommandExecutionError,
     run_command_async,
@@ -29,6 +29,8 @@ from ...utils.command_runner import (
 from ...utils.json_utils import safe_json_loads
 
 logger = logging.getLogger(__name__)
+
+_USER_FILE_MODE = 0o644
 
 
 # ── helpers ──────────────────────────────────────────────────────────────
@@ -59,13 +61,13 @@ async def _git_cmd(
         return 1, ""
 
 
-async def detect_git_context(workspace_dir: Path) -> dict[str, Any]:
+async def detect_git_context(project_dir: Path) -> dict[str, Any]:
     """Probe the environment for git availability (async).
 
     Returns a dict with keys::
 
         git_installed   – bool, ``git`` binary found on PATH
-        is_git_repo     – bool, *workspace_dir* is inside a git repo
+        is_git_repo     – bool, *project_dir* is inside a git repo
         default_branch  – str, e.g. ``"main"``
         current_branch  – str
         repo_root       – str, absolute path of the repo root
@@ -82,7 +84,7 @@ async def detect_git_context(workspace_dir: Path) -> dict[str, Any]:
         return ctx
     ctx["git_installed"] = True
 
-    cwd = str(workspace_dir)
+    cwd = str(project_dir)
 
     try:
         rc, _ = await _git_cmd("rev-parse", "--is-inside-work-tree", cwd=cwd)
@@ -133,13 +135,53 @@ async def detect_git_context(workspace_dir: Path) -> dict[str, Any]:
     return ctx
 
 
+def ensure_mission_git_exclude(
+    project_dir: Path,
+    git_context: dict[str, Any],
+) -> bool:
+    """Exclude project-local Mission state without editing .gitignore."""
+    if not git_context.get("is_git_repo"):
+        return True
+    repo_root_value = git_context.get("repo_root")
+    if not isinstance(repo_root_value, str) or not repo_root_value:
+        return False
+    try:
+        repo_root = Path(repo_root_value).resolve()
+        relative_project = project_dir.resolve().relative_to(repo_root)
+        relative_state = (
+            relative_project / ".qwenpaw"
+            if relative_project.parts
+            else Path(".qwenpaw")
+        )
+        pattern = f"{relative_state.as_posix().rstrip('/')}/"
+        exclude_path = repo_root / ".git" / "info" / "exclude"
+        exclude_path.parent.mkdir(parents=True, exist_ok=True)
+        existing = (
+            exclude_path.read_text(encoding="utf-8")
+            if exclude_path.exists()
+            else ""
+        )
+        if pattern not in existing.splitlines():
+            prefix = "" if not existing or existing.endswith("\n") else "\n"
+            with exclude_path.open("a", encoding="utf-8") as handle:
+                handle.write(f"{prefix}{pattern}\n")
+        return True
+    except (OSError, RuntimeError, ValueError):
+        logger.warning(
+            "Unable to exclude .qwenpaw Mission state in %s",
+            project_dir,
+            exc_info=True,
+        )
+        return False
+
+
 # ── loop directory & state files ─────────────────────────────────────────
 
 
-def create_loop_dir(workspace_dir: Path) -> Path:
+def create_loop_dir(project_dir: Path) -> Path:
     """Create a new mission directory and return its path."""
     loop_id = f"mission-{_ts()}"
-    loop_dir = workspace_dir / "missions" / loop_id
+    loop_dir = project_dir / ".qwenpaw" / "missions" / loop_id
     loop_dir.mkdir(parents=True, exist_ok=True)
     logger.info("Created mission dir: %s", loop_dir)
     return loop_dir
@@ -148,9 +190,10 @@ def create_loop_dir(workspace_dir: Path) -> Path:
 def write_loop_config(loop_dir: Path, config: dict[str, Any]) -> Path:
     """Persist environment metadata for this loop."""
     p = loop_dir / "loop_config.json"
-    p.write_text(
-        json.dumps(config, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    write_json_atomic(
+        p,
+        config,
+        new_file_mode=_USER_FILE_MODE,
     )
     return p
 
@@ -169,16 +212,21 @@ def read_loop_config(loop_dir: Path) -> dict[str, Any]:
 def write_task_md(loop_dir: Path, task_text: str) -> Path:
     """Persist the original task description."""
     p = loop_dir / "task.md"
-    p.write_text(task_text, encoding="utf-8")
+    write_text_atomic(
+        p,
+        task_text,
+        new_file_mode=_USER_FILE_MODE,
+    )
     return p
 
 
 def write_prd_json(loop_dir: Path, prd: dict[str, Any]) -> Path:
     """Write the structured task list."""
     p = loop_dir / "prd.json"
-    p.write_text(
-        json.dumps(prd, indent=2, ensure_ascii=False),
-        encoding="utf-8",
+    write_json_atomic(
+        p,
+        prd,
+        new_file_mode=_USER_FILE_MODE,
     )
     return p
 
@@ -186,11 +234,12 @@ def write_prd_json(loop_dir: Path, prd: dict[str, Any]) -> Path:
 def init_progress_txt(loop_dir: Path) -> Path:
     """Create initial progress log with empty Codebase Patterns."""
     p = loop_dir / "progress.txt"
-    p.write_text(
+    write_text_atomic(
+        p,
         "## Codebase Patterns\n"
         "(none yet — add reusable patterns here as you discover them)\n"
         "---\n",
-        encoding="utf-8",
+        new_file_mode=_USER_FILE_MODE,
     )
     return p
 
@@ -215,7 +264,7 @@ def get_all_passed(prd: dict[str, Any]) -> bool:
 
 
 def get_active_loop_dir(
-    workspace_dir: Path,
+    project_dir: Path,
     session_id: str = "",
 ) -> Path | None:
     """Return the most recent mission directory for this session.
@@ -224,14 +273,14 @@ def get_active_loop_dir(
     loop_config.json.session_id matches the provided session_id.
 
     Args:
-        workspace_dir: Workspace root directory.
+        project_dir: Effective project root directory.
         session_id: Current session ID. If empty, returns the globally
             latest loop (backward compatibility).
 
     Returns:
         Path to the newest loop matching session_id, or None if not found.
     """
-    base = workspace_dir / "missions"
+    base = project_dir / ".qwenpaw" / "missions"
     if not base.exists():
         return None
 
@@ -260,9 +309,9 @@ def get_active_loop_dir(
     return None
 
 
-def list_loop_dirs(workspace_dir: Path) -> list[dict[str, Any]]:
-    """Return summary info for all missions in a workspace."""
-    base = workspace_dir / "missions"
+def list_loop_dirs(project_dir: Path) -> list[dict[str, Any]]:
+    """Return summary info for all missions in a project."""
+    base = project_dir / ".qwenpaw" / "missions"
     if not base.exists():
         return []
     result = []

@@ -74,7 +74,15 @@ class MissionGate(LoopGate):
         state: Optional[_MissionState] = self._state()
         if state is None:
             state = self._try_restore(ctx)
-        if state is None or not state.active:
+        if state is None:
+            saved = self._saved_state(ctx)
+            if isinstance(saved, dict) and saved.get("active"):
+                return StopHandlerResult(
+                    action=StopAction.TERMINATE,
+                    reason="Mission state directory was deleted",
+                )
+            return _bypass
+        if not state.active:
             return _bypass
 
         from .state import (
@@ -166,18 +174,42 @@ class MissionGate(LoopGate):
         )
         self.activate(ms)
 
+    def restore(self, ctx: Any) -> None:
+        """Restore current-session state when persisted mission data exists."""
+        if self._state() is None:
+            self._try_restore(ctx)
+
+    async def persistence_snapshot(self) -> dict[str, Any] | None:
+        """Return current state with phase refreshed from loop config."""
+        state: Optional[_MissionState] = self._state()
+        if state is None or not state.active:
+            return None
+
+        from .state import read_loop_config
+
+        cfg = await asyncio.to_thread(read_loop_config, state.loop_dir)
+        state.phase = cfg.get("current_phase", state.phase)
+        return {
+            "active": True,
+            "loop_dir": str(state.loop_dir),
+            "phase": state.phase,
+        }
+
     def _try_restore(
         self,
         ctx: Any,
     ) -> Optional[_MissionState]:
-        """Lazy-restore from session_state."""
+        """Lazy-restore from the existing mode-state lifecycle."""
         if isinstance(ctx, dict):
-            ss = ctx.get("session_state")
+            mode_state = ctx.get("mode_state")
         else:
-            ss = getattr(ctx, "session_state", None)
-        if not ss or not ss.get("mission_active"):
+            mode_state = getattr(ctx, "mode_state", None)
+        if not isinstance(mode_state, dict):
             return None
-        loop_dir_str = ss.get("mission_loop_dir")
+        saved = mode_state.get("mission")
+        if not isinstance(saved, dict) or not saved.get("active"):
+            return None
+        loop_dir_str = saved.get("loop_dir")
         if not loop_dir_str:
             return None
         ld = Path(loop_dir_str)
@@ -185,8 +217,8 @@ class MissionGate(LoopGate):
             return None
         ms = _MissionState(
             loop_dir=ld,
-            phase=ss.get(
-                "mission_phase",
+            phase=saved.get(
+                "phase",
                 "execution",
             ),
         )
@@ -196,6 +228,18 @@ class MissionGate(LoopGate):
             ld,
         )
         return ms
+
+    @staticmethod
+    def _saved_state(ctx: Any) -> dict[str, Any] | None:
+        """Return the persisted Mission state from a hook context."""
+        if isinstance(ctx, dict):
+            mode_state = ctx.get("mode_state")
+        else:
+            mode_state = getattr(ctx, "mode_state", None)
+        if not isinstance(mode_state, dict):
+            return None
+        saved = mode_state.get("mission")
+        return saved if isinstance(saved, dict) else None
 
     @staticmethod
     def _remaining_summary(

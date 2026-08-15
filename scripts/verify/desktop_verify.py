@@ -1,8 +1,8 @@
 # -*- coding: utf-8 -*-
 """Desktop release verification script.
 
-Drives a running QwenPaw desktop backend (any of the four packaging flavours:
-legacy-win / legacy-mac / tauri-win / tauri-mac) end-to-end:
+Drives a running QwenPaw desktop backend (either Tauri packaging flavour:
+tauri-win / tauri-mac) end-to-end:
 
 1. ``GET /api/version`` — health + version match.
 2. ``GET /``           — frontend HTML served.
@@ -22,8 +22,6 @@ legacy-win / legacy-mac / tauri-win / tauri-mac) end-to-end:
    send message via input box -> receive bubble back with correct answer.
 
 UI flavours:
-- ``--ui-mode legacy``         Playwright + headless Chromium, points at
-                               ``http://127.0.0.1:<port>/`` (Legacy Win/Mac).
 - ``--ui-mode tauri-macos``    Playwright + headless WebKit (same engine as
                                the Tauri webview on macOS).
 - ``--ui-mode tauri-windows``  Playwright + headless Chromium (same engine
@@ -45,6 +43,7 @@ from __future__ import annotations
 
 import abc
 import argparse
+import faulthandler
 import json
 import os
 import sys
@@ -58,12 +57,22 @@ DEFAULT_TIMEOUT = 120
 SESSION_ID = "release-verify-session"
 USER_ID = "release-verify-user"
 
+# The verify step runs under timeout-minutes: 10 in desktop-build.yml, so
+# self-report at 540s: a hung driver dumps every thread's stack and exits
+# while there is still time, instead of being SIGKILLed at 600s with its
+# buffered stdout discarded and the step showing no diagnostics at all.
+HANG_DUMP_SECONDS = 540
+
 # Selectors come straight from e2e/pages/chat_page.py so they stay in sync
 # with what the real UI tests expect.
-SEL_INPUT = "textarea.qwenpaw-sender-input"
+SEL_INPUT = (
+    '.qwenpaw-sender [role="textbox"][contenteditable="true"]:visible, '
+    "textarea.qwenpaw-sender-input:visible"
+)
 SEL_SEND_BTN = "button.qwenpaw-sender-actions-btn.qwenpaw-btn-primary"
 SEL_USER_BUBBLE = ".qwenpaw-bubble.qwenpaw-bubble-end"
 SEL_AI_BUBBLE = ".qwenpaw-bubble.qwenpaw-bubble-start"
+SEL_TOUR_NEXT = "button.qwenpaw-tour-next-btn"
 
 
 # =============================================================================
@@ -256,6 +265,7 @@ class PlaywrightDriver(UIDriver):
 
     INPUT_VISIBLE_TIMEOUT_MS = 60_000
     NAVIGATE_TIMEOUT_MS = 60_000
+    LAUNCH_TIMEOUT_MS = 60_000
 
     def __init__(
         self,
@@ -308,7 +318,10 @@ class PlaywrightDriver(UIDriver):
                     raise UIDriverInitError(
                         f"playwright has no browser '{browser}'",
                     )
-                self._browser = launcher.launch(headless=headless)
+                self._browser = launcher.launch(
+                    headless=headless,
+                    timeout=self.LAUNCH_TIMEOUT_MS,
+                )
                 self._context = self._browser.new_context()
                 self._page = self._context.new_page()
         except UIDriverInitError:
@@ -512,17 +525,34 @@ class PlaywrightDriver(UIDriver):
             except Exception:  # noqa: BLE001
                 pass
 
+    def _dismiss_open_tour(self) -> None:
+        """Complete any active product tour before driving the chat UI."""
+        dismissed_steps = 0
+        for _ in range(10):
+            next_button = self._page.locator(SEL_TOUR_NEXT).first
+            if not next_button.is_visible():
+                break
+            next_button.click(timeout=5_000)
+            dismissed_steps += 1
+            time.sleep(0.2)
+
+        if self._page.locator(SEL_TOUR_NEXT).first.is_visible():
+            raise RuntimeError("Product tour did not close after 10 steps")
+        if dismissed_steps:
+            print(f"INFO  dismissed product tour ({dismissed_steps} step(s))")
+
     def chat_one_round(self, message: str, timeout: int) -> str:
+        self._dismiss_open_tour()
         self._wait_previous_round_idle()
 
         ai_count_before = self._page.locator(SEL_AI_BUBBLE).count()
         user_count_before = self._page.locator(SEL_USER_BUBBLE).count()
 
         # Defensive input flow borrowed from e2e/pages/chat_page.py:
-        # focus the textarea, clear any leftover text, fill the new
+        # focus the chat input, clear any leftover text, fill the new
         # message, then click send (or fall back to Enter).
         input_box = self._page.locator(SEL_INPUT).first
-        input_box.click()
+        input_box.focus()
         time.sleep(0.2)
         input_box.fill("")
         time.sleep(0.2)
@@ -565,9 +595,9 @@ class PlaywrightDriver(UIDriver):
             )
         except Exception:  # noqa: BLE001
             # Fall back to pressing Enter — some layouts ignore the
-            # send button click but accept Enter on the textarea.
+            # send button click but accept Enter on the chat input.
             try:
-                input_box.click()
+                input_box.focus()
                 time.sleep(0.2)
                 input_box.press("Enter")
                 self._page.wait_for_function(
@@ -651,7 +681,7 @@ class PlaywrightDriver(UIDriver):
                 pass
 
 
-UI_MODES = ("legacy", "tauri-macos", "tauri-windows")
+UI_MODES = ("tauri-macos", "tauri-windows")
 
 
 def make_driver(
@@ -661,8 +691,6 @@ def make_driver(
     cdp_url: str = "",
 ) -> UIDriver:
     """Build a concrete ``UIDriver`` for the requested mode."""
-    if ui_mode == "legacy":
-        return PlaywrightDriver("chromium", screenshot_dir, headless)
     if ui_mode == "tauri-macos":
         return PlaywrightDriver("webkit", screenshot_dir, headless)
     if ui_mode == "tauri-windows":
@@ -797,9 +825,9 @@ def main() -> int:
     parser.add_argument(
         "--ui-mode",
         choices=UI_MODES,
-        default="legacy",
-        help="UI driver flavour. 'legacy' uses Playwright + Chromium; "
-        "'tauri-macos' / 'tauri-windows' use platform webdrivers.",
+        required=True,
+        help="UI driver flavour. 'tauri-macos' uses Playwright + WebKit; "
+        "'tauri-windows' uses Playwright + Chromium over CDP.",
     )
     parser.add_argument(
         "--api-key",
@@ -950,4 +978,5 @@ def main() -> int:
 
 
 if __name__ == "__main__":
+    faulthandler.dump_traceback_later(HANG_DUMP_SECONDS, exit=True)
     sys.exit(main())

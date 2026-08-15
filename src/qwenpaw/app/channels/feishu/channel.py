@@ -39,6 +39,7 @@ from ....exceptions import ChannelError
 from ....config.config import FeishuConfig as FeishuChannelConfig
 from ....config.utils import get_config_path
 from ....constant import DEFAULT_MEDIA_DIR
+from ..renderer import ChannelDisplayConfig
 from ..base import (
     BaseChannel,
     ContentType,
@@ -71,7 +72,6 @@ from .utils import (
     sender_display_string,
     short_session_id_from_full_id,
 )
-from .cards import FeishuCardHandler
 
 
 # Compatibility for setuptools>=82 where pkg_resources may be absent.
@@ -119,6 +119,7 @@ class _EventLoopProxy:
 
 
 try:
+    from .cards import FeishuCardHandler
     import lark_oapi as lark
     from lark_oapi.api.contact.v3 import GetUserRequest
     from lark_oapi.api.im.v1 import (
@@ -217,10 +218,8 @@ class FeishuChannel(BaseChannel):
         media_dir: str = "",
         workspace_dir: Path | None = None,
         on_reply_sent: OnReplySent = None,
-        show_tool_details: bool = True,
-        filter_tool_messages: bool = False,
+        display_config: ChannelDisplayConfig | None = None,
         no_text_debounce: bool = True,
-        filter_thinking: bool = False,
         dm_policy: str = "open",
         group_policy: str = "open",
         allow_from: Optional[List[str]] = None,
@@ -235,10 +234,8 @@ class FeishuChannel(BaseChannel):
         super().__init__(
             process,
             on_reply_sent=on_reply_sent,
-            show_tool_details=show_tool_details,
-            filter_tool_messages=filter_tool_messages,
+            display_config=display_config,
             no_text_debounce=no_text_debounce,
-            filter_thinking=filter_thinking,
             dm_policy=dm_policy,
             group_policy=group_policy,
             allow_from=allow_from,
@@ -254,7 +251,12 @@ class FeishuChannel(BaseChannel):
         self.bot_prefix = bot_prefix
         self.encrypt_key = encrypt_key or ""
         self.verification_token = verification_token or ""
-        self.domain = domain if domain in ("feishu", "lark") else "feishu"
+        # "feishu" / "lark", or a full http(s) base URL for custom /
+        # private gateways (e.g. a local mock in tests).
+        if domain in ("feishu", "lark") or str(domain).startswith("http"):
+            self.domain = domain
+        else:
+            self.domain = "feishu"
         self.share_session_in_group = share_session_in_group
         self._workspace_dir = (
             Path(workspace_dir).expanduser() if workspace_dir else None
@@ -296,6 +298,14 @@ class FeishuChannel(BaseChannel):
         # All interactive-card logic (outbound rendering + inbound
         # card.action.trigger dispatch) lives in the card handler.
         self._card_handler = FeishuCardHandler(self)
+
+    def _sdk_domain(self) -> str:
+        """SDK base URL: custom http(s) gateway, or the lark/feishu enum."""
+        if str(self.domain).startswith("http"):
+            return str(self.domain)
+        return (
+            lark.LARK_DOMAIN if self.domain == "lark" else lark.FEISHU_DOMAIN
+        )
 
     @classmethod
     def from_env(
@@ -341,10 +351,8 @@ class FeishuChannel(BaseChannel):
         process: ProcessHandler,
         config: FeishuChannelConfig,
         on_reply_sent: OnReplySent = None,
-        show_tool_details: bool = True,
-        filter_tool_messages: bool = False,
+        display_config: ChannelDisplayConfig | None = None,
         no_text_debounce: bool = True,
-        filter_thinking: bool = False,
         workspace_dir: Path | None = None,
     ) -> "FeishuChannel":
         return cls(
@@ -358,10 +366,9 @@ class FeishuChannel(BaseChannel):
             media_dir=config.media_dir or "",
             workspace_dir=workspace_dir,
             on_reply_sent=on_reply_sent,
-            show_tool_details=show_tool_details,
-            filter_tool_messages=filter_tool_messages,
+            display_config=display_config
+            or ChannelDisplayConfig.from_config(config),
             no_text_debounce=no_text_debounce,
-            filter_thinking=filter_thinking,
             dm_policy=config.dm_policy or "open",
             group_policy=config.group_policy or "open",
             allow_from=config.allow_from or [],
@@ -508,11 +515,7 @@ class FeishuChannel(BaseChannel):
             if not token:
                 logger.warning("feishu: failed to get access token")
                 return None
-            base_url = (
-                "https://open.larksuite.com"
-                if self.domain == "lark"
-                else "https://open.feishu.cn"
-            )
+            base_url = self._sdk_domain()
             url = f"{base_url}/open-apis/bot/v3/info"
             response = await self._http_client.get(
                 url,
@@ -1207,9 +1210,11 @@ class FeishuChannel(BaseChannel):
             quoted_lines.append(f"[quoted {label}]")
         for hint in error_hints:
             quoted_lines.append(
-                f"[quoted {hint[1:]}"
-                if hint.startswith("[")
-                else f"[quoted {hint}]",
+                (
+                    f"[quoted {hint[1:]}"
+                    if hint.startswith("[")
+                    else f"[quoted {hint}]"
+                ),
             )
         # Prepend all quoted lines before existing text_parts.
         text_parts[:0] = quoted_lines
@@ -2536,11 +2541,7 @@ class FeishuChannel(BaseChannel):
                     self.app_secret,
                     event_handler=event_handler,
                     log_level=lark.LogLevel.INFO,
-                    domain=(
-                        lark.LARK_DOMAIN
-                        if self.domain == "lark"
-                        else lark.FEISHU_DOMAIN
-                    ),
+                    domain=self._sdk_domain(),
                 )
 
                 # Patch SDK to track last-received timestamp for
@@ -2761,9 +2762,7 @@ class FeishuChannel(BaseChannel):
         self._http_client = httpx.AsyncClient(
             timeout=30.0,
         )
-        sdk_domain = (
-            lark.LARK_DOMAIN if self.domain == "lark" else lark.FEISHU_DOMAIN
-        )
+        sdk_domain = self._sdk_domain()
         self._client = (
             lark.Client.builder()
             .app_id(self.app_id)

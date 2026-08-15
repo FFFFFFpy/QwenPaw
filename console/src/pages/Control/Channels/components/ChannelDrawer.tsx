@@ -13,7 +13,7 @@ import { LinkOutlined } from "@ant-design/icons";
 import { useTranslation } from "react-i18next";
 import { useEffect } from "react";
 import type { FormInstance } from "antd";
-import { getChannelLabel, type ChannelKey } from "./constants";
+import { getChannelLabel, isLoopbackHost, type ChannelKey } from "./constants";
 import { QrcodeAuthBlock } from "./QrcodeAuthBlock";
 import type { ChannelSchema } from "../../../../api/modules/channel";
 import styles from "../index.module.less";
@@ -93,8 +93,11 @@ const TWILIO_CONSOLE_URL = "https://console.twilio.com";
 const BASE_FIELDS = [
   "enabled",
   "bot_prefix",
-  "filter_tool_messages",
-  "filter_thinking",
+  "show_tool_calls",
+  "show_tool_results",
+  "tool_call_max_length",
+  "tool_result_max_length",
+  "show_thinking",
   "isBuiltin",
 ];
 
@@ -173,6 +176,15 @@ export function ChannelDrawer({
   const matrixAuthMethod = Form.useWatch("auth_method", form);
   const isMatrixPasswordAuth = matrixAuthMethod === "password";
   const feishuDomain = (Form.useWatch("domain", form) as string) || "feishu";
+  const showToolCalls = Form.useWatch("show_tool_calls", form) ?? true;
+  const showToolResults = Form.useWatch("show_tool_results", form) ?? true;
+  const onebotMediaBase64 = Form.useWatch("media_base64", form) ?? false;
+  const onebotWsHost = (Form.useWatch("ws_host", form) as string) ?? "";
+  // The backend falls back to loopback when ws_host is blank, and rejects
+  // every connection on a network-reachable host until a token is set.
+  const onebotTokenRequired = !isLoopbackHost(
+    onebotWsHost.trim() || "127.0.0.1",
+  );
 
   // Parent calls form.setFieldsValue() before the Form mounts, which wins over
   // initialValues. Re-apply auth_method after open so the dropdown is correct.
@@ -1319,9 +1331,9 @@ export function ChannelDrawer({
             <Form.Item
               name="ws_host"
               label="WebSocket Host"
-              rules={[{ required: true }]}
+              tooltip={t("channels.onebotWsHostTooltip")}
             >
-              <Input placeholder="0.0.0.0" />
+              <Input placeholder="127.0.0.1" />
             </Form.Item>
             <Form.Item
               name="ws_port"
@@ -1343,9 +1355,87 @@ export function ChannelDrawer({
                 placeholder="6199"
               />
             </Form.Item>
-            <Form.Item name="access_token" label="Access Token">
+            <Form.Item
+              name="access_token"
+              label="Access Token"
+              tooltip={t("channels.onebotAccessTokenTooltip")}
+              rules={
+                onebotTokenRequired
+                  ? [
+                      {
+                        required: true,
+                        whitespace: true,
+                        message: t("channels.onebotAccessTokenRequired"),
+                      },
+                    ]
+                  : []
+              }
+            >
               <Input.Password placeholder="Access token for authentication" />
             </Form.Item>
+            <Form.Item
+              name="media_dir"
+              label={t("channels.onebotMediaDir")}
+              tooltip={t("channels.onebotMediaDirTooltip")}
+            >
+              <Input placeholder={defaultMediaDir} />
+            </Form.Item>
+            <Form.Item
+              name="media_download_max_mb"
+              label={t("channels.onebotMediaDownloadMaxMb")}
+              tooltip={t("channels.onebotMediaDownloadMaxMbTooltip")}
+              rules={[
+                {
+                  required: true,
+                  message: t("channels.onebotMediaDownloadMaxMbRequired"),
+                },
+                {
+                  type: "number",
+                  min: 1,
+                  message: t("channels.onebotMediaDownloadMaxMbMin"),
+                },
+              ]}
+            >
+              <InputNumber
+                min={1}
+                precision={0}
+                style={{ width: "100%" }}
+                addonAfter="MB"
+              />
+            </Form.Item>
+            <Form.Item
+              name="media_base64"
+              label={t("channels.onebotMediaBase64")}
+              valuePropName="checked"
+              tooltip={t("channels.onebotMediaBase64Tooltip")}
+            >
+              <Switch />
+            </Form.Item>
+            {onebotMediaBase64 && (
+              <Form.Item
+                name="media_base64_max_mb"
+                label={t("channels.onebotMediaBase64MaxMb")}
+                tooltip={t("channels.onebotMediaBase64MaxMbTooltip")}
+                rules={[
+                  {
+                    required: true,
+                    message: t("channels.onebotMediaBase64MaxMbRequired"),
+                  },
+                  {
+                    type: "number",
+                    min: 1,
+                    message: t("channels.onebotMediaBase64MaxMbMin"),
+                  },
+                ]}
+              >
+                <InputNumber
+                  min={1}
+                  precision={0}
+                  style={{ width: "100%" }}
+                  addonAfter="MB"
+                />
+              </Form.Item>
+            )}
             <Form.Item
               name="share_session_in_group"
               label={t("channels.shareSessionInGroup")}
@@ -1623,26 +1713,52 @@ export function ChannelDrawer({
             </Form.Item>
           )}
 
-          {activeKey !== "console" && (
-            <>
+          <>
+            <Form.Item
+              name="show_tool_calls"
+              label={t("channels.showToolCalls")}
+              valuePropName="checked"
+              tooltip={t("channels.showToolCallsTooltip")}
+            >
+              <Switch />
+            </Form.Item>
+            {showToolCalls && (
               <Form.Item
-                name="filter_tool_messages"
-                label={t("channels.filterToolMessages")}
+                name="tool_call_max_length"
+                label={t("channels.toolCallMaxLength")}
+                tooltip={t("channels.toolMaxLengthTooltip")}
+              >
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+            )}
+            <Form.Item
+              name="show_tool_results"
+              label={t("channels.showToolResults")}
+              valuePropName="checked"
+              tooltip={t("channels.showToolResultsTooltip")}
+            >
+              <Switch />
+            </Form.Item>
+            {showToolResults && (
+              <Form.Item
+                name="tool_result_max_length"
+                label={t("channels.toolResultMaxLength")}
+                tooltip={t("channels.toolMaxLengthTooltip")}
+              >
+                <InputNumber min={0} style={{ width: "100%" }} />
+              </Form.Item>
+            )}
+            {activeKey !== "console" && (
+              <Form.Item
+                name="show_thinking"
+                label={t("channels.showThinking")}
                 valuePropName="checked"
-                tooltip={t("channels.filterToolMessagesTooltip")}
+                tooltip={t("channels.showThinkingTooltip")}
               >
                 <Switch />
               </Form.Item>
-              <Form.Item
-                name="filter_thinking"
-                label={t("channels.filterThinking")}
-                valuePropName="checked"
-                tooltip={t("channels.filterThinkingTooltip")}
-              >
-                <Switch />
-              </Form.Item>
-            </>
-          )}
+            )}
+          </>
 
           {(activeKey === "wecom" ||
             activeKey === "telegram" ||

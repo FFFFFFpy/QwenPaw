@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import base64
 import os
-from typing import Any
+from typing import Any, ClassVar
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
@@ -65,6 +65,44 @@ from pydantic import Field
 MAX_INLINE_MEDIA_BYTES = 2 * 1024 * 1024  # 2 MB
 
 
+def _resolve_local_path(url: str) -> str | None:
+    """Resolve a URL or bare path to a local filesystem path.
+
+    Returns ``None`` for any non-local scheme (http, https, s3,
+    oss, ftp, data, etc.).  Handles ``file://`` URIs (including
+    UNC and localhost authority) and bare local paths produced
+    by ``_fixup_media_list`` normalization.
+    """
+    parsed = urlparse(url)
+    scheme = parsed.scheme
+
+    if scheme == "file":
+        nl = parsed.netloc
+        if not nl or nl.lower() == "localhost":
+            # file:///path or file://localhost/path -> local
+            full_path = parsed.path
+        elif len(nl) == 2 and nl[0].isalpha() and nl[1] == ":":
+            # Two-slash Windows: file://C:/path
+            full_path = f"{nl}{parsed.path}"
+        else:
+            # UNC: file://server/share/path
+            full_path = f"//{nl}{parsed.path}"
+        return url2pathname(full_path)
+
+    if scheme == "":
+        # Bare local path (e.g. /tmp/x.png, C:/Temp/x.png,
+        # //server/share/x.png).
+        return url
+
+    # Single-letter scheme on Windows is a drive letter,
+    # e.g. urlparse("C:/Temp/x.png") gives scheme="c".
+    if len(scheme) == 1 and scheme.isalpha():
+        return url
+
+    # Any other scheme (http, https, s3, oss, ftp, data, ...)
+    return None
+
+
 def inline_media_size(source: Any) -> int | None:
     """Return the byte size of *source* if it would be inlined locally.
 
@@ -72,14 +110,13 @@ def inline_media_size(source: Any) -> int | None:
     unrecognised source types so the caller leaves them untouched.
     """
     if isinstance(source, URLSource):
-        url = str(source.url)
-        if url.startswith("file://"):
-            path = url2pathname(urlparse(url).path)
-            try:
-                return os.path.getsize(path)
-            except OSError:
-                return None
-        return None
+        path = _resolve_local_path(str(source.url))
+        if path is None:
+            return None
+        try:
+            return os.path.getsize(path)
+        except OSError:
+            return None
     if isinstance(source, Base64Source):
         # base64 length -> approximate raw byte count.
         return len(source.data or "") * 3 // 4
@@ -136,18 +173,18 @@ class CappingFormatterMixin:  # pylint: disable=too-few-public-methods
 
     @staticmethod
     def _local_source_to_base64(source: Any) -> Any:
-        """Convert a local ``file://`` URLSource to a Base64Source.
+        """Convert a local URLSource to a Base64Source.
 
-        Non-local sources (remote URLs, already-base64 sources, anything
-        else) are returned unchanged so the base formatter handles them as
-        before.
+        Handles both ``file://`` URIs and bare local paths
+        (produced by ``_fixup_media_list`` normalization).
+        Non-local sources (remote URLs, already-base64 sources,
+        anything else) are returned unchanged.
         """
         if not isinstance(source, URLSource):
             return source
-        url = str(source.url)
-        if not url.startswith("file://"):
+        path = _resolve_local_path(str(source.url))
+        if path is None:
             return source
-        path = url2pathname(urlparse(url).path)
         with open(path, "rb") as f:
             encoded = base64.b64encode(f.read()).decode("utf-8")
         return Base64Source(data=encoded, media_type=source.media_type)
@@ -155,6 +192,8 @@ class CappingFormatterMixin:  # pylint: disable=too-few-public-methods
 
 class _CappingOpenAIFormatter(OpenAIChatFormatter, CappingFormatterMixin):
     """OpenAI formatter that caps oversized local image/audio media."""
+
+    _qwenpaw_supports_reasoning_content_fallback: ClassVar[bool] = True
 
     def _format_image_source(self, source: Any) -> dict[str, Any]:
         capped = self._maybe_cap(source, "image")
@@ -214,6 +253,8 @@ class _CappingDashScopeFormatter(
     CappingFormatterMixin,
 ):
     """DashScope formatter capping oversized local image/video/audio media."""
+
+    _qwenpaw_supports_reasoning_content_fallback: ClassVar[bool] = True
 
     def _format_video_source(self, source: Any) -> dict[str, Any]:
         capped = self._maybe_cap(source, "video")

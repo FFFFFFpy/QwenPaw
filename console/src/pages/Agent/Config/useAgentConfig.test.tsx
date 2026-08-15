@@ -7,9 +7,11 @@ import type { AgentsRunningConfig } from "../../../api/types";
 const hoisted = vi.hoisted(() => {
   const mockSetFieldsValue = vi.fn();
   const mockValidateFields = vi.fn();
+  const mockGetFieldsValue = vi.fn();
   const mockFormInstance = {
     setFieldsValue: mockSetFieldsValue,
     validateFields: mockValidateFields,
+    getFieldsValue: mockGetFieldsValue,
   };
   const messageMock = {
     success: vi.fn(),
@@ -30,6 +32,7 @@ const hoisted = vi.hoisted(() => {
   return {
     mockSetFieldsValue,
     mockValidateFields,
+    mockGetFieldsValue,
     mockFormInstance,
     messageMock,
     apiMocks,
@@ -77,6 +80,7 @@ import { useAgentConfig } from "./useAgentConfig";
 const {
   mockSetFieldsValue,
   mockValidateFields,
+  mockGetFieldsValue,
   apiMocks,
   messageMock,
   modalConfirmMock,
@@ -121,8 +125,8 @@ function makeConfig(overrides: Partial<Config> = {}): Config {
   };
 }
 
-function renderConfigHook() {
-  return renderHook(() => useAgentConfig());
+function renderConfigHook(onConfigLoaded?: (config: Config) => void) {
+  return renderHook(() => useAgentConfig(onConfigLoaded));
 }
 
 describe("useAgentConfig", () => {
@@ -130,6 +134,7 @@ describe("useAgentConfig", () => {
     vi.clearAllMocks();
     mockSetFieldsValue.mockReset();
     mockValidateFields.mockReset();
+    mockGetFieldsValue.mockReset();
     apiMocks.getAgentRunningConfig.mockReset();
     apiMocks.getAgentLanguage.mockReset();
     apiMocks.getUserTimezone.mockReset();
@@ -144,6 +149,7 @@ describe("useAgentConfig", () => {
     apiMocks.getAgentLanguage.mockResolvedValue({ language: "en" });
     apiMocks.getUserTimezone.mockResolvedValue({ timezone: "UTC" });
     mockValidateFields.mockResolvedValue(makeConfig());
+    mockGetFieldsValue.mockReturnValue(makeConfig());
   });
 
   it("initial loading=true, then loading=false after fetchConfig", async () => {
@@ -246,6 +252,25 @@ describe("useAgentConfig", () => {
     expect(messageMock.success).toHaveBeenCalledWith("agentConfig.saveSuccess");
   });
 
+  it("reports the server config after save", async () => {
+    const onConfigLoaded = vi.fn();
+    const savedConfig = makeConfig({
+      reme_light_memory_config: {
+        needs_reindex: true,
+      } as Config["reme_light_memory_config"],
+    });
+    apiMocks.updateAgentRunningConfig.mockResolvedValue(savedConfig);
+    const { result } = renderConfigHook(onConfigLoaded);
+    await waitFor(() => expect(result.current.loading).toBe(false));
+    onConfigLoaded.mockClear();
+
+    await act(async () => {
+      await result.current.handleSave();
+    });
+
+    expect(onConfigLoaded).toHaveBeenCalledWith(savedConfig);
+  });
+
   it("handleSave persists configToSave containing approval_level", async () => {
     apiMocks.updateAgentRunningConfig.mockResolvedValue(makeConfig());
     const { result } = renderConfigHook();
@@ -263,6 +288,88 @@ describe("useAgentConfig", () => {
 
     const saved = apiMocks.updateAgentRunningConfig.mock.calls[0][0] as Config;
     expect(saved.approval_level).toBe("STRICT");
+  });
+
+  it("handleSave syncs legacy max_iters from loop.iteration.max_iterations", async () => {
+    apiMocks.getAgentRunningConfig.mockResolvedValue(
+      makeConfig({ max_iters: 100 }),
+    );
+    const loaded = makeConfig({ max_iters: 100 });
+    const { max_iters: _staleMaxIters, ...formWithoutMaxIters } = loaded;
+    mockGetFieldsValue.mockReturnValue({
+      ...formWithoutMaxIters,
+      loop: {
+        ...loaded.loop,
+        iteration: {
+          enabled: true,
+          max_iterations: 99,
+        },
+      },
+    });
+    apiMocks.updateAgentRunningConfig.mockResolvedValue(makeConfig());
+    const { result } = renderConfigHook();
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.handleSave();
+    });
+
+    const saved = apiMocks.updateAgentRunningConfig.mock.calls[0][0] as Config;
+    expect(saved.loop.iteration?.max_iterations).toBe(99);
+    expect(saved.max_iters).toBe(99);
+  });
+
+  it("handleSave includes unmounted custom loop template values", async () => {
+    const customMode = {
+      id: "quality",
+      name: "Quality",
+      description: "Review before stopping.",
+      slash_command: "quality",
+      enabled: true,
+      gates: [
+        {
+          id: "rubric-1",
+          type: "completion_rubric" as const,
+          enabled: true,
+          params: {
+            prompt: "Every explicit requirement is complete.",
+            completion_signal: "DONE",
+          },
+        },
+      ],
+    };
+    mockValidateFields.mockResolvedValue({
+      loop: { custom_modes: [{ name: "Quality" }] },
+    });
+    mockGetFieldsValue.mockReturnValue(
+      makeConfig({
+        loop: {
+          doom_loop: {
+            enabled: true,
+            window_size: 3,
+            similarity_threshold: 1,
+            stages: [],
+          },
+          custom_modes: [customMode],
+        },
+      }),
+    );
+    apiMocks.updateAgentRunningConfig.mockResolvedValue(makeConfig());
+    const { result } = renderConfigHook();
+    await waitFor(() => {
+      expect(result.current.loading).toBe(false);
+    });
+
+    await act(async () => {
+      await result.current.handleSave();
+    });
+
+    expect(mockValidateFields).toHaveBeenCalledTimes(1);
+    expect(mockGetFieldsValue).toHaveBeenCalledWith(true);
+    const saved = apiMocks.updateAgentRunningConfig.mock.calls[0][0] as Config;
+    expect(saved.loop.custom_modes).toEqual([customMode]);
   });
 
   it("handleSave calls message.error when update fails", async () => {

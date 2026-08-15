@@ -17,11 +17,13 @@ from qwenpaw.providers.capping_formatter import (
     _CappingGeminiFormatter,
     _CappingOpenAIFormatter,
 )
+from qwenpaw.providers.context_windows import DEFAULT_CONTEXT_WINDOW
 from qwenpaw.providers.openai_provider import (
     GitHubModelsProvider,
     OpenAIProvider,
 )
-from qwenpaw.providers.provider import ModelInfo
+from qwenpaw.providers.openrouter_provider import OpenRouterProvider
+from qwenpaw.providers.provider import ModelInfo, ProviderInfo
 from qwenpaw.providers.provider_manager import ProviderManager
 
 LEGACY_PROVIDER = {
@@ -169,6 +171,38 @@ async def test_add_custom_provider_and_reload_from_storage(
     assert isinstance(loaded_builtin_conflict, OpenAIProvider)
     assert loaded_duplicate is not None
     assert isinstance(loaded_duplicate, OpenAIProvider)
+
+
+async def test_custom_provider_preserves_explicit_default_context_window(
+    isolated_secret_dir,
+) -> None:
+    manager = ProviderManager()
+    request_model = ModelInfo(
+        id="claude-sonnet-4-5",
+        name="Claude Sonnet 4.5",
+        max_input_length=DEFAULT_CONTEXT_WINDOW,
+    )
+    assert "max_input_length" in request_model.model_fields_set
+    assert request_model.max_input_length_configured is False
+
+    await manager.add_custom_provider(
+        ProviderInfo(
+            id="custom-context-window",
+            name="Custom Context Window",
+            chat_model="OpenAIChatModel",
+            extra_models=[request_model],
+        ),
+    )
+
+    reloaded = ProviderManager().get_provider("custom-context-window")
+    assert reloaded is not None
+    model = reloaded.get_model_info("claude-sonnet-4-5")
+    assert model is not None
+    assert model.max_input_length_configured is True
+    assert (
+        reloaded.get_context_size("claude-sonnet-4-5")
+        == DEFAULT_CONTEXT_WINDOW
+    )
 
 
 async def test_activate_provider_persists_active_model(
@@ -393,6 +427,177 @@ def test_update_provider_for_builtin_persists_to_builtin_path(
     assert isinstance(persisted_azure, OpenAIProvider)
     assert persisted_azure.base_url == "https://azure-updated.example/v1"
     assert persisted_azure.api_key == "sk-azure-updated"
+
+
+@pytest.mark.parametrize(
+    ("saved_length", "expected_configured"),
+    [
+        (64_000, True),
+        (DEFAULT_CONTEXT_WINDOW, False),
+    ],
+)
+def test_legacy_builtin_context_window_infers_non_default_as_configured(
+    isolated_secret_dir,
+    saved_length: int,
+    expected_configured: bool,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    data = provider.model_dump()
+    for model in data["models"]:
+        model.pop("max_input_length_configured", None)
+        if model["id"] == "gpt-4o":
+            model["max_input_length"] = saved_length
+
+    builtin_path = isolated_secret_dir / "providers" / "builtin"
+    (builtin_path / "openai.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    reloaded = ProviderManager().get_provider("openai")
+    assert reloaded is not None
+    model = reloaded.get_model_info("gpt-4o")
+    assert model is not None
+    assert model.max_input_length == saved_length
+    assert model.max_input_length_configured is expected_configured
+
+
+def test_builtin_capability_probe_results_survive_storage_reload(
+    isolated_secret_dir,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openai")
+    assert provider is not None
+    data = provider.model_dump()
+    for model in data["models"]:
+        if model["id"] == "gpt-4o":
+            model["supports_multimodal"] = False
+            model["supports_image"] = False
+            model["supports_video"] = False
+
+    builtin_path = isolated_secret_dir / "providers" / "builtin"
+    (builtin_path / "openai.json").write_text(
+        json.dumps(data, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+
+    reloaded = ProviderManager().get_provider("openai")
+    assert reloaded is not None
+    model = reloaded.get_model_info("gpt-4o")
+    assert model is not None
+    assert model.supports_multimodal is False
+    assert model.supports_image is False
+    assert model.supports_video is False
+
+
+async def test_openrouter_metadata_probe_restores_and_persists_capabilities(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openrouter")
+    assert isinstance(provider, OpenRouterProvider)
+
+    model_id = "x-ai/grok-4.5"
+    poisoned_model = ModelInfo(
+        id=model_id,
+        name="Grok 4.5",
+        supports_multimodal=False,
+        supports_image=False,
+        supports_video=False,
+        probe_source="probed",
+    )
+    monkeypatch.setattr(provider, "extra_models", [poisoned_model])
+
+    row = SimpleNamespace(
+        id=model_id,
+        name="Grok 4.5",
+        pricing=None,
+        architecture={
+            "input_modalities": ["text", "image", "file"],
+            "output_modalities": ["text"],
+        },
+    )
+
+    class FakeModels:
+        async def list(self, timeout=None):
+            _ = timeout
+            return SimpleNamespace(data=[row])
+
+    fake_client = SimpleNamespace(models=FakeModels())
+    monkeypatch.setattr(
+        OpenRouterProvider,
+        "_client",
+        lambda self, timeout=30: fake_client,
+    )
+
+    result = await manager.probe_model_multimodal("openrouter", model_id)
+
+    assert result["supports_image"] is True
+    assert poisoned_model.supports_image is True
+    assert poisoned_model.supports_video is False
+    assert poisoned_model.supports_multimodal is True
+    assert poisoned_model.probe_source == "documentation"
+
+    saved_path = (
+        isolated_secret_dir / "providers" / "builtin" / "openrouter.json"
+    )
+    saved = json.loads(saved_path.read_text(encoding="utf-8"))
+    saved_model = next(
+        item for item in saved["extra_models"] if item["id"] == model_id
+    )
+    assert saved_model["supports_image"] is True
+    assert saved_model["supports_multimodal"] is True
+    assert saved_model["probe_source"] == "documentation"
+
+
+async def test_openrouter_inconclusive_probe_does_not_overwrite_capabilities(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    manager = ProviderManager()
+    provider = manager.get_provider("openrouter")
+    assert isinstance(provider, OpenRouterProvider)
+
+    model_id = "x-ai/grok-4.5"
+    configured_model = ModelInfo(
+        id=model_id,
+        name="Grok 4.5",
+        supports_multimodal=True,
+        supports_image=True,
+        supports_video=False,
+        probe_source="documentation",
+    )
+    monkeypatch.setattr(provider, "extra_models", [configured_model])
+
+    class FakeModels:
+        async def list(self, timeout=None):
+            _ = timeout
+            return SimpleNamespace(data=[])
+
+    fake_client = SimpleNamespace(models=FakeModels())
+    monkeypatch.setattr(
+        OpenRouterProvider,
+        "_client",
+        lambda self, timeout=30: fake_client,
+    )
+    save_calls = []
+    monkeypatch.setattr(
+        manager,
+        "_save_provider",
+        lambda *args, **kwargs: save_calls.append((args, kwargs)),
+    )
+
+    with pytest.raises(ProviderError, match="was not found"):
+        await manager.probe_model_multimodal("openrouter", model_id)
+
+    assert configured_model.supports_multimodal is True
+    assert configured_model.supports_image is True
+    assert configured_model.supports_video is False
+    assert configured_model.probe_source == "documentation"
+    assert not save_calls
 
 
 def test_update_provider_for_unknown_returns_false(
@@ -834,3 +1039,79 @@ async def test_update_config_persists_api_key_prefixes(
     assert provider.api_key_prefixes == ["ghp_", "github_pat_"]
     info = await provider.get_info()
     assert info.api_key_prefixes == ["ghp_", "github_pat_"]
+
+
+async def test_activate_model_clears_rejects_media_for_selected_model(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    """Re-selecting a model drops its stale rejects_media entry."""
+    from qwenpaw.providers.model_capability_cache import (
+        ModelCapabilityCache,
+        get_capability_cache,
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return SimpleNamespace(id="ok", request=kwargs)
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions()),
+    )
+    monkeypatch.setattr(
+        OpenAIProvider,
+        "_client",
+        lambda self, timeout=5: fake_client,
+    )
+
+    fresh = ModelCapabilityCache()
+    monkeypatch.setattr(ModelCapabilityCache, "_instance", fresh)
+    cache = get_capability_cache()
+    cache.learn("openai:gpt-5", "rejects_media", True)
+    assert cache.get("openai:gpt-5", "rejects_media", False) is True
+
+    manager = ProviderManager()
+    await manager.activate_model("openai", "gpt-5")
+
+    assert cache.get("openai:gpt-5", "rejects_media", False) is False
+
+
+async def test_activate_model_preserves_other_models_and_capabilities(
+    isolated_secret_dir,
+    monkeypatch,
+) -> None:
+    """Activating one model must not evict capabilities of other models."""
+    from qwenpaw.providers.model_capability_cache import (
+        ModelCapabilityCache,
+        get_capability_cache,
+    )
+
+    class FakeCompletions:
+        def create(self, **kwargs):
+            return SimpleNamespace(id="ok", request=kwargs)
+
+    fake_client = SimpleNamespace(
+        chat=SimpleNamespace(completions=FakeCompletions()),
+    )
+    monkeypatch.setattr(
+        OpenAIProvider,
+        "_client",
+        lambda self, timeout=5: fake_client,
+    )
+
+    fresh = ModelCapabilityCache()
+    monkeypatch.setattr(ModelCapabilityCache, "_instance", fresh)
+    cache = get_capability_cache()
+    cache.learn("openai:gpt-5", "rejects_media", True)
+    cache.learn("openai:gpt-5", "needs_reasoning_content", True)
+    cache.learn("ollama:llama3", "rejects_media", True)
+
+    manager = ProviderManager()
+    await manager.activate_model("openai", "gpt-5")
+
+    # rejects_media for the selected model is cleared
+    assert cache.get("openai:gpt-5", "rejects_media", False) is False
+    # needs_reasoning_content for the same model is preserved
+    assert cache.get("openai:gpt-5", "needs_reasoning_content", False) is True
+    # another model's entries are untouched
+    assert cache.get("ollama:llama3", "rejects_media", False) is True

@@ -37,7 +37,7 @@ const GenericToolCard: React.FC<GenericToolCardProps> = ({
       title={t("tool.execute", { tool: toolLabel })}
       content={content}
       isStreaming={isStreaming}
-      defaultOpen={hasMedia && content.status === "done"}
+      defaultExpanded={hasMedia && content.status === "done"}
     >
       {hasMedia && (
         <div

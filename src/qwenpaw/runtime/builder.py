@@ -12,11 +12,59 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
-from ..agents.acp.meta import ACP_CODING_PROJECT_META_KEY
+from ..agents.acp.meta import ACP_PROJECT_DIR_META_KEY
+from ..utils.io_utils import run_sync_io
+
+if TYPE_CHECKING:
+    from ..agents.context.visual_compression.runtime.recovery import (
+        TurnRecoveryStore,
+    )
 
 _logger = logging.getLogger(__name__)
+
+
+def _descriptor_for(tool: Any) -> Any | None:
+    """Return the descriptor from a tool or its common wrapper attributes."""
+    for candidate in (
+        tool,
+        getattr(tool, "func", None),
+        getattr(tool, "_func", None),
+    ):
+        descriptor = getattr(candidate, "_tool_descriptor", None)
+        if descriptor is not None:
+            return descriptor
+    return None
+
+
+def _bound_skill_loader_dirs(tools: Iterable[Any]) -> list[str]:
+    """Resolve descriptor-declared skill directories with language variants."""
+    from ..agents.skill_system.registry import (
+        get_builtin_skill_language_preference,
+    )
+
+    language = get_builtin_skill_language_preference()
+    dirs: list[str] = []
+    for tool in tools:
+        metadata = getattr(_descriptor_for(tool), "metadata", None) or {}
+        names = metadata.get("bound_skills") or ()
+        root = metadata.get("bound_skills_root")
+        if not names or not root:
+            continue
+        for name in names:
+            preferred = Path(root) / f"{name}-{language}"
+            fallback = Path(root) / f"{name}-en"
+            chosen = preferred if preferred.is_dir() else fallback
+            if (chosen / "SKILL.md").exists():
+                dirs.append(str(chosen))
+            else:
+                _logger.warning(
+                    "bound skill %r has no SKILL.md under %s; not injected",
+                    name,
+                    root,
+                )
+    return dirs
 
 
 class AgentBuilder:
@@ -38,7 +86,7 @@ class AgentBuilder:
         agent_config: Any,
         *,
         agent_id: str | None = None,
-        request_context: dict[str, str] | None = None,
+        request_context: dict[str, Any] | None = None,
         active_modes: Iterable[str] | None = None,
         effective_skills: Iterable[str] | None = None,
         enabled_features: Iterable[str] | None = None,
@@ -72,7 +120,12 @@ class AgentBuilder:
             tools = []
 
         if extra_tools:
-            tools.extend(extra_tools)
+            tools.extend(
+                self._filter_extra_tools_for_subagent(
+                    extra_tools,
+                    request_context,
+                ),
+            )
 
         if memory_tools:
             from ..governance import PolicyGuardedTool
@@ -86,12 +139,62 @@ class AgentBuilder:
                     ),
                 )
 
+        # Final pass: cover workspace + extras + memory in one filter.
+        tools = self.apply_subagent_tool_whitelist(tools, request_context)
+
         skill_dirs = self._resolve_skill_loader_dirs(
             effective_skills,
             workspace_dir,
         )
+        for extra in _bound_skill_loader_dirs(tools):
+            if extra not in skill_dirs:
+                skill_dirs.append(extra)
 
         return Toolkit(tools=tools, skills_or_loaders=skill_dirs)
+
+    @staticmethod
+    def _tool_name(tool: Any) -> str:
+        """Best-effort tool name for whitelist filtering."""
+        name = getattr(tool, "name", None)
+        if isinstance(name, str) and name:
+            return name
+        fn = getattr(tool, "func", None) or getattr(tool, "_func", None)
+        if callable(fn):
+            return getattr(fn, "__name__", "") or ""
+        return getattr(tool, "__name__", "") or ""
+
+    @classmethod
+    def apply_subagent_tool_whitelist(
+        cls,
+        tools: Iterable[Any],
+        request_context: dict[str, Any] | None,
+    ) -> list[Any]:
+        """Filter *tools* by ``subagent_allowed_tools`` (final-pass API).
+
+        - ``None`` / non-list → inherit (no filter)
+        - ``[]`` → deny all tools
+        - non-empty list → keep only matching python tool names
+        """
+        items = list(tools)
+        whitelist = (request_context or {}).get("subagent_allowed_tools")
+        if not isinstance(whitelist, list):
+            return items
+        if not whitelist:
+            return []
+        allow = set(whitelist)
+        return [t for t in items if cls._tool_name(t) in allow]
+
+    @classmethod
+    def _filter_extra_tools_for_subagent(
+        cls,
+        extra_tools: Iterable[Any],
+        request_context: dict[str, Any] | None,
+    ) -> list[Any]:
+        """Apply ``subagent_allowed_tools`` to post-list_tools extras."""
+        return cls.apply_subagent_tool_whitelist(
+            extra_tools,
+            request_context,
+        )
 
     @staticmethod
     def _resolve_skill_loader_dirs(
@@ -122,7 +225,7 @@ class AgentBuilder:
 
     # ----------------------------------------------------------------- build
 
-    async def build(  # pylint: disable=too-many-statements
+    async def build(  # pylint: disable=too-many-statements,too-many-branches
         self,
         ctx: Any,
     ) -> Any:
@@ -147,7 +250,7 @@ class AgentBuilder:
         agent_id = getattr(ctx, "agent_id", None) or "default"
         agent_config = load_agent_config(agent_id)
         request_context = self._build_request_context(ctx)
-        agent_config = self._apply_request_coding_project(
+        agent_config = self._apply_request_project(
             agent_config,
             request_context,
         )
@@ -175,6 +278,11 @@ class AgentBuilder:
         except Exception:
             effective_skills = []
 
+        subagent_skills = request_context.get("subagent_skills")
+        if isinstance(subagent_skills, list):
+            parent_set = set(effective_skills)
+            effective_skills = [s for s in subagent_skills if s in parent_set]
+
         # Compute active modes.
         active_modes: set[str] = set()
         workspace = getattr(ctx, "workspace", None)
@@ -184,13 +292,12 @@ class AgentBuilder:
                 active_modes = plugins.active_mode_names(ctx)
 
         # Governor (governance policy layer).
-        _cm = getattr(agent_config, "coding_mode", None)
-        _project_dir = (
-            _cm.project_dir
-            if _cm and getattr(_cm, "project_dir", None)
-            else None
+        _project_dir = getattr(agent_config, "project_dir", None)
+        governor = await run_sync_io(
+            self._init_governor,
+            workspace_dir,
+            _project_dir,
         )
-        governor = self._init_governor(workspace_dir, _project_dir)
 
         # Inject governor into local_workspace so list_tools() can
         # wrap tools with PolicyGuardedTool.
@@ -199,12 +306,26 @@ class AgentBuilder:
             local_ws.set_governor(governor)
 
         # Toolkit.
+        from ..agents.context.visual_compression.runtime.recovery import (
+            TurnRecoveryStore,
+        )
+
+        visual_recovery_store = TurnRecoveryStore()
         extra_tools = self._collect_coding_mode_tools(
             agent_config,
             workspace_dir,
             agent_id,
             request_context,
             governor,
+        )
+        extra_tools.extend(
+            self._collect_visual_compression_tools(
+                agent_config,
+                agent_id,
+                request_context,
+                governor,
+                visual_recovery_store,
+            ),
         )
         (
             driver_tools,
@@ -220,14 +341,18 @@ class AgentBuilder:
 
         # Model + formatter (built before the toolkit so the scroll context
         # strategy, which needs the model for token counting, can wire in).
-        model, _formatter = self.build_model(agent_config)
+        model_slot_override = getattr(ctx.request, "model_slot_override", None)
+        model, _formatter = self.build_model(
+            agent_config,
+            model_slot_override=model_slot_override,
+        )
 
         # Built once and shared: the agent's native offloader, and (when
         # ``offload_dialog`` is on) scroll's optional dialog archive.
         offloader = self._build_offloader(ctx, agent_config)
 
         # Optional scroll context strategy (None unless strategy="scroll").
-        scroll = self._build_scroll_components(
+        scroll = await self._build_scroll_components(
             ctx,
             agent_config,
             model,
@@ -259,6 +384,7 @@ class AgentBuilder:
                 governor,
             )
 
+        memory_manager = self._get_memory_manager(ctx)
         toolkit = await self.build_toolkit(
             agent_config,
             agent_id=agent_id,
@@ -266,6 +392,11 @@ class AgentBuilder:
             active_modes=active_modes,
             effective_skills=effective_skills,
             extra_tools=extra_tools,
+            memory_tools=(
+                memory_manager.list_memory_tools()
+                if memory_manager is not None
+                else None
+            ),
             governor=governor,
             ctx=ctx,
             workspace_dir=workspace_dir,
@@ -274,11 +405,15 @@ class AgentBuilder:
         # System prompt.
         sys_prompt = self.build_prompt(ctx, agent_config)
 
-        middlewares = self._build_middlewares(ctx, agent_config)
+        middlewares = self._build_middlewares(
+            ctx,
+            agent_config,
+            visual_recovery_store,
+        )
 
         running_config = agent_config.running
 
-        from ..loop.react_gates import (
+        from ..modes.default import (
             resolve_max_iterations,
         )
 
@@ -294,7 +429,6 @@ class AgentBuilder:
             agent_config=agent_config,
             workspace_dir=workspace_dir,
             request_context=request_context,
-            memory_manager=self._get_memory_manager(ctx),
             offloader=offloader,
             context_config=self._build_context_config(agent_config),
             context_manager=(
@@ -303,14 +437,6 @@ class AgentBuilder:
             effective_skills=effective_skills,
             governor=governor,
         )
-
-        # Register default ReAct gates (StopHandler).
-        if workspace is not None:
-            from ..loop.react_gates import (
-                register_react_gates,
-            )
-
-            register_react_gates(workspace, running_config)
 
         # Load session state if SessionLoadHook populated it.
         if ctx.session_state:
@@ -371,12 +497,17 @@ class AgentBuilder:
 
         return build_default_prompt_manager().build_sync(prompt_ctx)
 
-    def build_model(self, agent_config: Any) -> tuple[Any, Any]:
+    def build_model(
+        self,
+        agent_config: Any,
+        model_slot_override: Any = None,
+    ) -> tuple[Any, Any]:
         """Create model and formatter using the factory method."""
         from ..agents.model_factory import create_model_and_formatter
 
         model, formatter = create_model_and_formatter(
             agent_id=agent_config.id,
+            model_slot_override=model_slot_override,
         )
         if formatter is not None:
             innermost = model
@@ -444,6 +575,9 @@ class AgentBuilder:
             "root_session_id": getattr(ctx, "root_session_id", "") or "",
             "root_agent_id": getattr(ctx, "root_agent_id", "") or "",
         }
+        _ws = getattr(ctx, "workspace_dir", None)
+        if _ws is not None:
+            rc.setdefault("workspace_dir", str(_ws))
         app_services = getattr(ctx, "app_services", None)
         if app_services is not None:
             rc["approval_coordinator"] = getattr(
@@ -474,43 +608,79 @@ class AgentBuilder:
         )
         if isinstance(_payload_ctx, dict):
             rc.update(_payload_ctx)
+        mode_state = getattr(ctx, "mode_state", {}) or {}
+        mission_state = mode_state.get("mission", {})
+        if isinstance(mission_state, dict) and mission_state.get("active"):
+            loop_dir = mission_state.get("loop_dir")
+            if isinstance(loop_dir, str) and loop_dir:
+                from ..modes.mission.state import read_loop_config
+
+                mission_config = read_loop_config(Path(loop_dir))
+                source_project = mission_config.get("source_project_dir")
+                if isinstance(source_project, str) and source_project:
+                    rc["active_mode_project_dir"] = source_project
         return rc
 
     @staticmethod
-    def _apply_request_coding_project(
+    def _apply_request_project(
         agent_config: Any,
         request_context: dict[str, Any],
     ) -> Any:
-        """Enable Coding Mode for this request when ACP supplies a project."""
-        raw_project_dir = request_context.get(ACP_CODING_PROJECT_META_KEY)
+        """Apply a validated request or active-mode project snapshot."""
+        from ..agents.fork_project import resolve_allowed_fork_project_dir
+
+        raw_project_dir = request_context.get("active_mode_project_dir")
+        if not isinstance(raw_project_dir, str) or not raw_project_dir.strip():
+            raw_project_dir = request_context.get("project_dir")
+        if not isinstance(raw_project_dir, str) or not raw_project_dir.strip():
+            raw_project_dir = request_context.get(ACP_PROJECT_DIR_META_KEY)
+        fork_raw = request_context.get("fork_project_dir")
+        if not isinstance(raw_project_dir, str) or not raw_project_dir.strip():
+            # spawn_subagent(fork=True) places the worktree here.
+            raw_project_dir = fork_raw
         if not isinstance(raw_project_dir, str) or not raw_project_dir.strip():
             return agent_config
+
+        # When fork_project_dir is present, the final project directory MUST be
+        # the validated worktree — never fall through to an unchecked ACP path.
+        if isinstance(fork_raw, str) and fork_raw.strip():
+            existing_pd = getattr(agent_config, "project_dir", None)
+            workspace_hint = request_context.get("workspace_dir") or getattr(
+                agent_config,
+                "workspace_dir",
+                None,
+            )
+            validated = resolve_allowed_fork_project_dir(
+                fork_raw,
+                workspace_dir=workspace_hint,
+                coding_project_dir=existing_pd,
+            )
+            if validated is None:
+                _logger.warning(
+                    "Rejecting fork_project_dir outside allowed worktree "
+                    "subtree: %s",
+                    fork_raw,
+                )
+                return agent_config
+            raw_project_dir = str(validated)
 
         project_dir = Path(raw_project_dir).expanduser().resolve()
         if not project_dir.is_dir():
             _logger.warning(
-                "Ignoring non-directory Coding Mode project: %s",
+                "Ignoring non-directory request project: %s",
                 raw_project_dir,
             )
             return agent_config
 
         if not hasattr(agent_config, "model_copy"):
             _logger.warning(
-                "Ignoring request Coding Mode project for unsupported config "
-                "type: %s",
+                "Ignoring request project for unsupported config type: %s",
                 type(agent_config).__name__,
             )
             return agent_config
 
         agent_config = agent_config.model_copy(deep=True)
-        cm = getattr(agent_config, "coding_mode", None)
-        if cm is None:
-            from ..config.config import CodingModeConfig
-
-            cm = CodingModeConfig()
-            agent_config.coding_mode = cm
-        cm.enabled = True
-        cm.project_dir = str(project_dir)
+        agent_config.project_dir = str(project_dir)
         return agent_config
 
     @staticmethod
@@ -523,14 +693,23 @@ class AgentBuilder:
         workspace_dir = getattr(ctx, "workspace_dir", None)
         ws = str(workspace_dir) if workspace_dir else str(WORKING_DIR)
 
-        _cm = getattr(agent_config, "coding_mode", None)
-        _project_dir = (
-            _cm.project_dir
-            if _cm
-            and getattr(_cm, "enabled", False)
-            and getattr(_cm, "project_dir", None)
-            else None
+        _project_dir = getattr(agent_config, "project_dir", None) or ws
+        # Prefer validated fork worktree as the shell/file working_dir.
+        request = getattr(ctx, "request", None)
+        _payload = (
+            getattr(request, "request_context", None) if request else None
         )
+        if isinstance(_payload, dict):
+            from ..agents.fork_project import resolve_allowed_fork_project_dir
+
+            _fork = resolve_allowed_fork_project_dir(
+                _payload.get("fork_project_dir"),
+                workspace_dir=workspace_dir,
+                coding_project_dir=_project_dir,
+            )
+            if _fork is not None:
+                ws = str(_fork)
+                _project_dir = str(_fork)
         _configured_shell = getattr(
             getattr(agent_config, "running", None),
             "shell_command_executable",
@@ -541,7 +720,6 @@ class AgentBuilder:
             or os.environ.get("SHELL")
             or ("cmd.exe" if sys.platform == "win32" else "/bin/sh")
         )
-        request = getattr(ctx, "request", None)
         _active = getattr(agent_config, "active_model", None)
         _model_name = (
             _active.model
@@ -576,6 +754,41 @@ class AgentBuilder:
             request_context=request_context,
             governor=governor,
         )
+
+    @staticmethod
+    def _collect_visual_compression_tools(
+        agent_config: Any,
+        agent_id: str,
+        request_context: dict[str, Any],
+        governor: Any = None,
+        recovery_store: TurnRecoveryStore | None = None,
+    ) -> list[Any]:
+        """Collect the optional visual-context recovery tool."""
+        config = (
+            agent_config.running.light_context_config.visual_compact_config
+        )
+        if not config.enabled:
+            return []
+
+        from ..agents.context.visual_compression.runtime.recovery import (
+            TurnRecoveryStore,
+            make_recover_visual_context_tool,
+        )
+
+        store = (
+            recovery_store
+            if recovery_store is not None
+            else TurnRecoveryStore()
+        )
+        recover_visual_context = make_recover_visual_context_tool(store)
+        return [
+            AgentBuilder._wrap_tool(
+                recover_visual_context,
+                agent_id,
+                request_context,
+                governor,
+            ),
+        ]
 
     @staticmethod
     def _get_driver_prompt_hints(ctx: Any) -> list[str]:
@@ -643,7 +856,7 @@ class AgentBuilder:
             return ContextConfig()
 
     @staticmethod
-    def _build_scroll_components(
+    async def _build_scroll_components(
         ctx: Any,
         agent_config: Any,
         model: Any,
@@ -674,7 +887,8 @@ class AgentBuilder:
         # history.db is shared across sessions in this workspace; rows are
         # keyed by session_id (the conversation) and agent_id (which agent
         # wrote them).
-        return build_scroll_components(
+        return await run_sync_io(
+            build_scroll_components,
             agent_config=agent_config,
             workspace_dir=workspace_dir,
             model=model,
@@ -727,11 +941,11 @@ class AgentBuilder:
         ``scroll_config.allow_unsandboxed``, via
         ``scroll_unsandboxed_allowed``).
 
-        When neither holds (e.g. Windows without WSL2), every call would fail
-        closed, and the guard layer misreads that ``DENIED`` as a sandbox
-        violation and escalates to a recurring approval prompt. So we omit the
-        REPL and let the model recall through the structured ``recall_history``
-        tool, which needs no sandbox. This is narrower than
+        When neither holds, every call would fail closed, and the guard layer
+        misreads that ``DENIED`` as a sandbox violation and escalates to a
+        recurring approval prompt. So we omit the REPL and let the model recall
+        through the structured ``recall_history`` tool, which needs no sandbox.
+        This is narrower than
         :meth:`_scroll_recall_runnable`, which gates whether scroll is wired at
         all; here scroll is already wired and structured recall is present.
 
@@ -780,11 +994,11 @@ class AgentBuilder:
 
         The sandboxed ``recall_history_python`` REPL is registered ONLY when
         it can actually run in a sandbox (or unsandboxed recall is explicitly
-        opted in). Where no sandbox exists — e.g. Windows without WSL2, or an
-        OFF-mode path that skips sandbox compilation — every call would fail
-        closed, and the guard layer misreads that ``DENIED`` as a sandbox
-        violation and turns it into a recurring approval prompt. Omitting it
-        removes that dead-end: the model recalls through the structured tool.
+        opted in). Where no sandbox exists, or an OFF-mode path skips sandbox
+        compilation, every call would fail closed, and the guard layer misreads
+        that ``DENIED`` as a sandbox violation and turns it into a recurring
+        approval prompt. Omitting it removes that dead-end: the model recalls
+        through the structured tool.
         """
         extra_tools.append(
             self._wrap_tool(
@@ -906,6 +1120,7 @@ class AgentBuilder:
     def _build_middlewares(
         ctx: Any,
         agent_config: Any,
+        visual_recovery_store: TurnRecoveryStore | None = None,
     ) -> list[Any]:
         """Build middleware list.
 
@@ -913,6 +1128,7 @@ class AgentBuilder:
         1. ToolResultPruningMiddleware — tiered tool result pruning
         2. ToolCoordinatorMiddleware — tool call lifecycle management
         3. Plugin-registered middlewares (sorted by priority)
+        4. VisualCompressionMiddleware — innermost pre-provider transform
         """
         mws: list[Any] = []
 
@@ -999,6 +1215,22 @@ class AgentBuilder:
                     reg.plugin_id,
                     exc_info=True,
                 )
+
+        # Visual compression is a request-boundary middleware. It reads the
+        # validated per-agent config and does not mutate it.
+        from ..agents.context.visual_compression.runtime.middleware import (
+            VisualCompressionMiddleware,
+        )
+
+        visual_config = (
+            agent_config.running.light_context_config.visual_compact_config
+        )
+        mws.append(
+            VisualCompressionMiddleware(
+                visual_config,
+                visual_recovery_store,
+            ),
+        )
 
         return mws
 

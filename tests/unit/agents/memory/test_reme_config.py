@@ -35,6 +35,29 @@ def test_memory_search_indexes_only_memory_markdown() -> None:
         assert job["watch_suffixes"] == ["md"]
 
 
+def test_reme_file_processing_is_limited_to_10_mb() -> None:
+    cfg = _config_for_embedding(EmbeddingModelConfig())
+
+    for job_name in ("index_update_loop", "reindex"):
+        assert cfg["jobs"][job_name]["max_file_bytes"] == 10 * 1024 * 1024
+
+
+def test_daily_paper_replaces_auto_resource_without_removing_resource_dir():
+    cfg = _config_for_embedding(EmbeddingModelConfig())
+
+    assert cfg["resource_dir"] == "resource"
+    assert "resource_watch_loop" not in cfg["jobs"]
+    assert "auto_resource" not in cfg["jobs"]
+    assert "resource" not in cfg["components"]["file_catalog"]
+    assert cfg["jobs"]["daily_paper"]["steps"] == [
+        {"backend": "daily_paper_collect_step"},
+        {"backend": "daily_paper_rank_step"},
+        {"backend": "daily_paper_select_step"},
+        {"backend": "daily_paper_analyze_step"},
+        {"backend": "daily_paper_digest_step"},
+    ]
+
+
 def test_status_job_reports_reme_memory_usage() -> None:
     cfg = _config_for_embedding(EmbeddingModelConfig())
 
@@ -49,6 +72,21 @@ def test_status_job_reports_reme_memory_usage() -> None:
     }
 
 
+def test_graph_snapshot_job_exposes_complete_wikilink_graph() -> None:
+    cfg = _config_for_embedding(EmbeddingModelConfig())
+
+    assert "traverse" not in cfg["jobs"]
+    assert cfg["jobs"]["graph_snapshot"] == {
+        "backend": "base",
+        "description": (
+            "Return the complete indexed wikilink "
+            "graph for frontend rendering."
+        ),
+        "parameters": {"type": "object", "properties": {}},
+        "steps": [{"backend": "graph_snapshot_step"}],
+    }
+
+
 def test_openai_compatible_embedding_requires_api_key() -> None:
     cfg = _config_for_embedding(
         EmbeddingModelConfig(
@@ -60,6 +98,8 @@ def test_openai_compatible_embedding_requires_api_key() -> None:
     )
 
     assert cfg["components"]["file_store"]["default"]["embedding_store"] == ""
+    assert "as_embedding" not in cfg["components"]
+    assert "embedding_store" not in cfg["components"]
 
 
 def test_openai_compatible_embedding_keeps_base_url_credential() -> None:
@@ -82,6 +122,24 @@ def test_openai_compatible_embedding_keeps_base_url_credential() -> None:
         "api_key": "local-key",
         "base_url": "http://localhost:1234/v1",
     }
+    assert as_embedding["pass_dimensions"] is False
+
+
+def test_openai_compatible_embedding_can_pass_dimensions() -> None:
+    cfg = _config_for_embedding(
+        EmbeddingModelConfig(
+            backend="openai",
+            api_key="local-key",
+            base_url="http://localhost:1234/v1",
+            model_name="local-embedding",
+            dimensions=768,
+            use_dimensions=True,
+        ),
+    )
+
+    as_embedding = cfg["components"]["as_embedding"]["default"]
+    assert as_embedding["dimensions"] == 768
+    assert as_embedding["pass_dimensions"] is True
 
 
 def test_openai_compatible_embedding_omits_blank_base_url() -> None:
@@ -116,6 +174,9 @@ def test_gemini_embedding_uses_api_key_without_base_url() -> None:
     assert cfg["components"]["as_embedding"]["default"]["credential"] == {
         "api_key": "gemini-key",
     }
+    assert (
+        "pass_dimensions" not in cfg["components"]["as_embedding"]["default"]
+    )
 
 
 def test_gemini_embedding_without_api_key_is_disabled() -> None:
@@ -129,6 +190,8 @@ def test_gemini_embedding_without_api_key_is_disabled() -> None:
     )
 
     assert cfg["components"]["file_store"]["default"]["embedding_store"] == ""
+    assert "as_embedding" not in cfg["components"]
+    assert "embedding_store" not in cfg["components"]
 
 
 def test_ollama_embedding_maps_base_url_to_host() -> None:
@@ -163,4 +226,4 @@ def test_ollama_embedding_without_host_still_enables_with_model() -> None:
         cfg["components"]["file_store"]["default"]["embedding_store"]
         == "default"
     )
-    assert cfg["components"]["as_embedding"]["default"]["credential"] == {}
+    assert not cfg["components"]["as_embedding"]["default"]["credential"]

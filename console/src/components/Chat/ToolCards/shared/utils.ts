@@ -101,6 +101,9 @@ export function getFileLanguage(tc: ToolCallContent): string {
 const IMG_EXTS = ["png", "jpg", "jpeg", "gif", "bmp", "webp", "svg"];
 const VIDEO_EXTS = ["mp4", "avi", "mov", "wmv", "flv", "mkv", "webm"];
 const AUDIO_EXTS = ["mp3", "wav", "flac", "ape", "aac", "ogg", "wma"];
+const INLINE_BASE64_HEAD_LENGTH = 8192;
+const INLINE_BASE64_RESULT_THRESHOLD = 64 * 1024;
+const INLINE_BASE64_TEXT_TAIL_LENGTH = 64 * 1024;
 
 export type MediaType = "image" | "video" | "audio" | "file";
 
@@ -109,6 +112,15 @@ export interface MediaInfo {
   name: string;
   type: MediaType;
   size?: number;
+}
+
+function hasLargeInlineBase64(result: string): boolean {
+  return (
+    result.length > INLINE_BASE64_RESULT_THRESHOLD &&
+    /["']type["']\s*:\s*["']base64["']/i.test(
+      result.slice(0, INLINE_BASE64_HEAD_LENGTH),
+    )
+  );
 }
 
 export function getFileExtFromPath(path: string): string {
@@ -131,12 +143,65 @@ function classifyMediaType(ext: string): MediaType {
  *
  * Also handles `{"type":"image","source":{...}}` etc.
  */
+function extractUrlFromResultBlocks(
+  result: unknown,
+): { url: string; filename?: string } | null {
+  let arr: unknown[] | null = null;
+
+  if (typeof result === "string") {
+    if (hasLargeInlineBase64(result)) return null;
+    try {
+      const parsed = JSON.parse(result);
+      if (Array.isArray(parsed)) arr = parsed;
+    } catch {
+      return null;
+    }
+  } else if (Array.isArray(result)) {
+    arr = result;
+  }
+
+  if (!arr) return null;
+
+  for (const block of arr) {
+    if (!block || typeof block !== "object") continue;
+    const b = block as Record<string, unknown>;
+
+    // Content blocks with source.url (file / image / video / audio types)
+    if (b.source && typeof b.source === "object") {
+      const src = b.source as Record<string, unknown>;
+      if (typeof src.url === "string" && src.url) {
+        return {
+          url: src.url,
+          filename: typeof b.filename === "string" ? b.filename : undefined,
+        };
+      }
+    }
+
+    // Flat blocks: { url: "..." } or { path: "..." }
+    if (typeof b.url === "string" && b.url) {
+      return {
+        url: b.url,
+        filename: typeof b.filename === "string" ? b.filename : undefined,
+      };
+    }
+    if (typeof b.path === "string" && b.path) {
+      return {
+        url: b.path,
+        filename: typeof b.filename === "string" ? b.filename : undefined,
+      };
+    }
+  }
+
+  return null;
+}
+
 function extractUrlsFromResultBlocks(
   result: unknown,
 ): Array<{ url: string; filename?: string }> {
   let arr: unknown[] | null = null;
 
   if (typeof result === "string") {
+    if (hasLargeInlineBase64(result)) return [];
     try {
       const parsed = JSON.parse(result);
       if (Array.isArray(parsed)) arr = parsed;
@@ -155,7 +220,6 @@ function extractUrlsFromResultBlocks(
     if (!block || typeof block !== "object") continue;
     const b = block as Record<string, unknown>;
 
-    // Content blocks with source.url (file / image / video / audio types)
     if (b.source && typeof b.source === "object") {
       const src = b.source as Record<string, unknown>;
       if (typeof src.url === "string" && src.url) {
@@ -165,25 +229,35 @@ function extractUrlsFromResultBlocks(
             typeof b.filename === "string"
               ? b.filename
               : typeof b.name === "string"
-              ? b.name
-              : undefined,
+                ? b.name
+                : undefined,
         });
         continue;
       }
     }
 
-    // Flat blocks: { url: "..." } or { path: "..." }
     if (typeof b.url === "string" && b.url) {
       values.push({
         url: b.url,
-        filename: typeof b.filename === "string" ? b.filename : undefined,
+        filename:
+          typeof b.filename === "string"
+            ? b.filename
+            : typeof b.name === "string"
+              ? b.name
+              : undefined,
       });
       continue;
     }
+
     if (typeof b.path === "string" && b.path) {
       values.push({
         url: b.path,
-        filename: typeof b.filename === "string" ? b.filename : undefined,
+        filename:
+          typeof b.filename === "string"
+            ? b.filename
+            : typeof b.name === "string"
+              ? b.name
+              : undefined,
       });
     }
   }
@@ -192,7 +266,8 @@ function extractUrlsFromResultBlocks(
 }
 
 /** Read the first usable path from params (multiple key variants). */
-function getPathFromParams(params: Record<string, unknown>): string {
+export function getFileOperationPath(tc: ToolCallContent): string {
+  const params = tc.params || {};
   return (params.file_path ||
     params.image_path ||
     params.video_path ||
@@ -201,16 +276,66 @@ function getPathFromParams(params: Record<string, unknown>): string {
     "") as string;
 }
 
-/** Extract every media item from tool params/result. */
-export function getMediaInfos(tc: ToolCallContent): MediaInfo[] {
-  const params = tc.params || {};
-  const paramPath = getPathFromParams(params);
+/**
+ * Whether a param path can actually be previewed by the backend.
+ * The preview endpoint only resolves absolute paths (plus `~`, drive
+ * letters and full URLs) — a bare relative path always 404s, so it
+ * must not be used as a preview URL fallback.
+ */
+function isPreviewablePath(path: string): boolean {
+  return (
+    path.startsWith("/") ||
+    path.startsWith("~") ||
+    /^[a-zA-Z]:[\\/]/.test(path) ||
+    path.startsWith("file://") ||
+    path.startsWith("http://") ||
+    path.startsWith("https://") ||
+    path.startsWith("data:")
+  );
+}
 
-  // 1) Preserve all result DataBlocks (image_generate can return 2-4).
+/** Extract media info from tool params/result (unified for all tool names) */
+export function getMediaInfo(tc: ToolCallContent): MediaInfo | null {
+  const paramPath = getFileOperationPath(tc);
+
+  // 1) Try to get a reliable URL from result content blocks
+  const fromResult = extractUrlFromResultBlocks(tc.result);
+
+  // 2) Try text-based regex extraction (e.g. "saved to /path/to/file")
+  let textUrl = "";
+  if (!fromResult && tc.result && typeof tc.result === "string") {
+    textUrl = extractUrlFromText(tc.result) || "";
+  }
+
+  const previewableParamPath = isPreviewablePath(paramPath) ? paramPath : "";
+  const rawUrl = fromResult?.url || previewableParamPath || textUrl || "";
+  if (!rawUrl) return null;
+
+  const name =
+    fromResult?.filename ||
+    rawUrl.split("/").pop() ||
+    paramPath.split("/").pop() ||
+    "file";
+  const ext = getFileExtFromPath(name);
+  const mediaType = classifyMediaType(ext);
+
+  return { url: toDisplayUrl(rawUrl), name, type: mediaType };
+}
+
+/**
+ * Extract every media item from a tool result.
+ *
+ * Standard QwenPaw tools normally return one attachment, while image_generate
+ * can return multiple DataBlocks. Keep getMediaInfo() for upstream callers and
+ * expose this multi-item variant for generated media.
+ */
+export function getMediaInfos(tc: ToolCallContent): MediaInfo[] {
   const fromResult = extractUrlsFromResultBlocks(tc.result);
+
   if (fromResult.length > 0) {
     return fromResult.map(({ url, filename }) => {
       const name = filename || url.split("/").pop() || "file";
+
       return {
         url: toDisplayUrl(url),
         name,
@@ -219,32 +344,29 @@ export function getMediaInfos(tc: ToolCallContent): MediaInfo[] {
     });
   }
 
-  // 2) Try text-based regex extraction (e.g. "saved to /path/to/file")
-  let textUrl = "";
-  if (tc.result && typeof tc.result === "string") {
-    textUrl = extractUrlFromText(tc.result) || "";
-  }
+  const single = getMediaInfo(tc);
+  return single ? [single] : [];
+}
 
-  const rawUrl = paramPath || textUrl || "";
-  if (!rawUrl) return [];
-
-  const name = rawUrl.split("/").pop() || paramPath.split("/").pop() || "file";
-  const ext = getFileExtFromPath(name);
-  const mediaType = classifyMediaType(ext);
-
-  return [{ url: toDisplayUrl(rawUrl), name, type: mediaType }];
+export function hasMultimediaPreview(tc: ToolCallContent): boolean {
+  const media = getMediaInfo(tc);
+  return Boolean(media && media.type !== "file");
 }
 
 /** Try to extract a file URL from a text result via regex patterns */
 export function extractUrlFromText(resultStr: string): string | null {
+  const searchableResult = hasLargeInlineBase64(resultStr)
+    ? resultStr.slice(-INLINE_BASE64_TEXT_TAIL_LENGTH)
+    : resultStr;
+
   // 1. "Saved to" pattern
-  const pathMatch = resultStr.match(
-    /(?:saved to|Saved to|保存到|输出到)[:\s]+([^\s\n]+)/i,
+  const pathMatch = searchableResult.match(
+    /(?:saved to|保存到|输出到)[:\s]+([^"\r\n]*?\.(?:png|jpg|jpeg|gif|bmp|webp|svg|mp4|avi|mov|wmv|flv|mkv|webm|mp3|wav|flac|ape|aac|ogg|wma))/i,
   );
-  if (pathMatch) return pathMatch[1].trim();
+  if (pathMatch) return pathMatch[1].trim().replace(/\\\\/g, "\\");
 
   // 2. Absolute file path with known media extension
-  const filePathMatch = resultStr.match(
+  const filePathMatch = searchableResult.match(
     /\/[\w.\-/]+\.(?:png|jpg|jpeg|gif|bmp|webp|svg|mp4|avi|mov|wmv|flv|mkv|webm|mp3|wav|flac|aac|ogg)/i,
   );
   if (filePathMatch) return filePathMatch[0];

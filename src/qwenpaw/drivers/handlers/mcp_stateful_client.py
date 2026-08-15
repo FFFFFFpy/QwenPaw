@@ -27,6 +27,7 @@ from mcp import ClientSession
 from mcp.client.stdio import StdioServerParameters
 from mcp.client.sse import sse_client
 from mcp.client.streamable_http import streamable_http_client
+from mcp.shared.exceptions import McpError
 
 logger = logging.getLogger(__name__)
 
@@ -55,6 +56,9 @@ _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
     ConnectionResetError,
     BrokenPipeError,
 )
+_TRANSPORT_MCP_MESSAGES = frozenset(
+    {"session terminated", "connection closed"},
+)
 
 
 # How long ``list_tools`` waits for an in-flight reconnect before raising.
@@ -62,6 +66,8 @@ _TRANSPORT_ERRORS: tuple[type[BaseException], ...] = (
 # in practice) with headroom, while still failing fast enough that a
 # permanently-broken client doesn't stall every turn for long.
 _LIST_TOOLS_RECONNECT_WAIT: float = 3.0
+_LIFECYCLE_CLEANUP_TIMEOUT: float = 5.0
+_LIFECYCLE_REAPERS: dict[asyncio.Task, asyncio.Task] = {}
 
 
 def _is_transport_error(exc: BaseException) -> bool:
@@ -71,7 +77,18 @@ def _is_transport_error(exc: BaseException) -> bool:
     reconnect rather than treat the failure as permanent.  See
     ``_TRANSPORT_ERRORS`` for the full list of recognised exception types.
     """
-    return isinstance(exc, _TRANSPORT_ERRORS)
+    if isinstance(exc, _TRANSPORT_ERRORS):
+        return True
+
+    if isinstance(exc, McpError):
+        error = getattr(exc, "error", None)
+        message = str(getattr(error, "message", exc)).strip().casefold()
+        return message in _TRANSPORT_MCP_MESSAGES
+
+    sub_excs = getattr(exc, "exceptions", None)
+    if sub_excs:
+        return any(_is_transport_error(item) for item in sub_excs)
+    return False
 
 
 def _is_401_error(exc: BaseException) -> bool:
@@ -252,8 +269,11 @@ class _MCPClientMixin:
                 f"Timeout waiting for MCP client '{self.name}' to connect",
             )
             self._stop_event.set()
-            if self._lifecycle_task:
-                await self._lifecycle_task
+            lifecycle_task = self._lifecycle_task
+            if lifecycle_task:
+                if not lifecycle_task.done():
+                    lifecycle_task.cancel()
+                await self._wait_for_lifecycle_exit(lifecycle_task)
             raise
 
         if self._oauth_required:
@@ -345,8 +365,34 @@ class _MCPClientMixin:
             try:
                 res = await self.session.list_tools()
             except Exception as exc:
-                self._handle_transport_error(exc)
-                raise
+                if not self._handle_transport_error(exc):
+                    raise
+
+                # Keep known schemas available during reconnection.
+                if self._cached_tools is not None:
+                    logger.warning(
+                        "MCP client '%s' session failed during list_tools; "
+                        "serving cached schemas while reconnecting.",
+                        self.name,
+                    )
+                    return self._cached_tools
+
+                # Cold discovery waits for reconnection and retries once.
+                try:
+                    await asyncio.wait_for(
+                        self._ready_event.wait(),
+                        timeout=_LIST_TOOLS_RECONNECT_WAIT,
+                    )
+                except asyncio.TimeoutError:
+                    raise exc from None
+
+                if not self.is_connected or self.session is None:
+                    raise exc from None
+                try:
+                    res = await self.session.list_tools()
+                except Exception as retry_exc:
+                    self._handle_transport_error(retry_exc)
+                    raise
             self._cached_tools = res.tools
             return res.tools
 
@@ -420,31 +466,82 @@ class _MCPClientMixin:
                 )
             return
 
+        lifecycle_task = self._lifecycle_task
         try:
-            # Signal stop and wait for the lifecycle task to finish.  This
-            # must happen even when is_connected is False (reconnect loop).
             self._stop_event.set()
-            if self._lifecycle_task:
-                await self._lifecycle_task
+            if lifecycle_task:
+                await self._wait_for_lifecycle_exit(lifecycle_task)
         except Exception as e:
             if not ignore_errors:
                 raise
             logger.warning(
                 f"Error closing MCP client '{self.name}': {e}",
             )
-        finally:
-            # Clear the reference unconditionally — including when the current
-            # coroutine is cancelled (CancelledError is BaseException, not
-            # Exception, so it bypasses the except block above).  _stop_event
-            # is already set at this point, so the task will exit on its next
-            # iteration even if we don't hold the reference.
-            self._lifecycle_task = None
 
     # ------------------------------------------------------------------
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _handle_transport_error(self, exc: BaseException) -> None:
+    def _clear_lifecycle_state(self, task: asyncio.Task) -> None:
+        """Clear state once the current lifecycle task has exited."""
+        if self._lifecycle_task is task:
+            self._lifecycle_task = None
+            self.session = None
+            self.is_connected = False
+            self._ready_event.clear()
+
+    async def _reap_lifecycle_task(self, lifecycle_task: asyncio.Task) -> None:
+        """Retain and retry cleanup until the lifecycle task exits."""
+        try:
+            while not lifecycle_task.done():
+                lifecycle_task.cancel()
+                done, _ = await asyncio.wait(
+                    {lifecycle_task},
+                    timeout=_LIFECYCLE_CLEANUP_TIMEOUT,
+                )
+                if lifecycle_task not in done:
+                    logger.warning(
+                        "MCP client '%s' lifecycle cleanup is still pending; "
+                        "retrying cancellation: done=%s, cancelled=%s, "
+                        "cancelling=%s",
+                        self.name,
+                        lifecycle_task.done(),
+                        lifecycle_task.cancelled(),
+                        lifecycle_task.cancelling(),
+                    )
+            await asyncio.gather(lifecycle_task, return_exceptions=True)
+            self._clear_lifecycle_state(lifecycle_task)
+        finally:
+            _LIFECYCLE_REAPERS.pop(lifecycle_task, None)
+
+    async def _wait_for_lifecycle_exit(self, task: asyncio.Task) -> None:
+        """Wait briefly for lifecycle cleanup without blocking forever."""
+        done, _ = await asyncio.wait(
+            {task},
+            timeout=_LIFECYCLE_CLEANUP_TIMEOUT,
+        )
+        if task not in done:
+            if task not in _LIFECYCLE_REAPERS:
+                reaper = asyncio.create_task(
+                    self._reap_lifecycle_task(task),
+                    name=f"mcp-lifecycle-reaper:{self.name}",
+                )
+                _LIFECYCLE_REAPERS[task] = reaper
+            logger.error(
+                "Timed out cleaning up MCP client '%s'; background reaper "
+                "active: "
+                "done=%s, cancelled=%s, cancelling=%s",
+                self.name,
+                task.done(),
+                task.cancelled(),
+                task.cancelling(),
+            )
+            return
+
+        await asyncio.gather(task, return_exceptions=True)
+        self._clear_lifecycle_state(task)
+
+    def _handle_transport_error(self, exc: BaseException) -> bool:
         """Mark the client as disconnected and schedule a reconnect when *exc*
         indicates a transport/stream failure rather than an MCP-level error.
 
@@ -477,9 +574,12 @@ class _MCPClientMixin:
         ``session`` reference is never reached before the lifecycle task
         replaces it.  Clearing it here would require a lock (the lifecycle
         task also writes ``session``), adding unnecessary complexity.
+
+        Returns:
+            Whether recovery state was applied.
         """
         if not _is_transport_error(exc):
-            return
+            return False
         logger.warning(
             "Transport error on MCP client '%s' (%s: %s); "
             "marking as disconnected and scheduling reconnect.",
@@ -504,6 +604,7 @@ class _MCPClientMixin:
         # session is left as-is; see docstring above.
         if not self._stop_event.is_set():
             self._reload_event.set()
+        return True
 
     async def _wait_for_reload_or_stop(self) -> None:
         """Wait for lifecycle control events without polling."""

@@ -38,6 +38,7 @@ from ....config.config import QQConfig as QQChannelConfig
 from ....constant import WORKING_DIR
 from ....exceptions import ChannelError, QQApiError
 
+from ..renderer import ChannelDisplayConfig
 from ..base import (
     BaseChannel,
     OnReplySent,
@@ -285,6 +286,11 @@ def _should_plaintext_fallback_from_markdown(exc: Exception) -> bool:
 def _get_api_base() -> str:
     """API root address (e.g. sandbox: https://sandbox.api.sgroup.qq.com)"""
     return os.getenv("QQ_API_BASE", DEFAULT_API_BASE).rstrip("/")
+
+
+def _get_token_url() -> str:
+    """Token endpoint (override with QQ_TOKEN_URL, e.g. for sandboxes)."""
+    return os.getenv("QQ_TOKEN_URL", TOKEN_URL)
 
 
 def _get_channel_url_sync(access_token: str) -> str:
@@ -657,10 +663,8 @@ class QQChannel(BaseChannel):
         bot_prefix: str = "",
         markdown_enabled: bool = True,
         on_reply_sent: OnReplySent = None,
-        show_tool_details: bool = True,
-        filter_tool_messages: bool = False,
+        display_config: ChannelDisplayConfig | None = None,
         no_text_debounce: bool = True,
-        filter_thinking: bool = False,
         media_dir: str = "",
         workspace_dir: Path | None = None,
         max_reconnect_attempts: int = 100,
@@ -671,10 +675,8 @@ class QQChannel(BaseChannel):
         super().__init__(
             process,
             on_reply_sent=on_reply_sent,
-            show_tool_details=show_tool_details,
-            filter_tool_messages=filter_tool_messages,
+            display_config=display_config,
             no_text_debounce=no_text_debounce,
-            filter_thinking=filter_thinking,
             access_control_dm=access_control_dm,
             access_control_group=access_control_group,
         )
@@ -723,7 +725,7 @@ class QQChannel(BaseChannel):
             import urllib.request
 
             req = urllib.request.Request(
-                TOKEN_URL,
+                _get_token_url(),
                 data=json.dumps(
                     {"appId": self.app_id, "clientSecret": self.client_secret},
                 ).encode(),
@@ -762,7 +764,7 @@ class QQChannel(BaseChannel):
             ):
                 return self._token_cache["token"]
         async with self._http.post(
-            TOKEN_URL,
+            _get_token_url(),
             json={"appId": self.app_id, "clientSecret": self.client_secret},
             headers={"Content-Type": "application/json"},
         ) as resp:
@@ -815,10 +817,8 @@ class QQChannel(BaseChannel):
         process: ProcessHandler,
         config: QQChannelConfig,
         on_reply_sent: OnReplySent = None,
-        show_tool_details: bool = True,
-        filter_tool_messages: bool = False,
+        display_config: ChannelDisplayConfig | None = None,
         no_text_debounce: bool = True,
-        filter_thinking: bool = False,
         workspace_dir: Path | None = None,
     ) -> "QQChannel":
         return cls(
@@ -829,10 +829,9 @@ class QQChannel(BaseChannel):
             bot_prefix=config.bot_prefix or "",
             markdown_enabled=getattr(config, "markdown_enabled", True),
             on_reply_sent=on_reply_sent,
-            show_tool_details=show_tool_details,
-            filter_tool_messages=filter_tool_messages,
+            display_config=display_config
+            or ChannelDisplayConfig.from_config(config),
             no_text_debounce=no_text_debounce,
-            filter_thinking=filter_thinking,
             media_dir=getattr(config, "media_dir", ""),
             workspace_dir=workspace_dir,
             max_reconnect_attempts=getattr(

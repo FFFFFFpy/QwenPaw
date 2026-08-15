@@ -72,7 +72,11 @@
   "bot_prefix": "[BOT]",
   "client_id": "你的 Client ID",
   "client_secret": "你的 Client Secret",
-  "filter_tool_messages": false
+  "show_tool_calls": true,
+  "show_tool_results": true,
+  "show_thinking": true,
+  "tool_call_max_length": 200,
+  "tool_result_max_length": 500
 }
 ```
 
@@ -90,7 +94,7 @@
 
 > **提示：**
 >
-> - 若希望隐藏工具执行详情，可设置 `filter_tool_messages: true`。
+> - 工具调用和结果可以分别控制是否显示；最大长度设置为 `0` 时不截断。
 > - AI Card 模式：将 `message_type` 设为 `card`，并填写 `card_template_id`；`card_template_key` 必须与钉钉模板变量名完全一致。
 > - 群聊场景建议显式配置 `robot_code`；留空时 QwenPaw 会回退使用 `client_id`。
 
@@ -515,14 +519,14 @@ NapCat  ──反向 WS──▶  QwenPaw (:6199/ws)
 
 3. 进入 **网络配置** → **新建** → **WebSocket 客户端**（反向 WS）：
    - URL：`ws://<qwenpaw地址>:6199/ws`
-   - Access Token：与 QwenPaw 配置中的 `access_token` 保持一致（可选）
+   - Access Token：与 QwenPaw 配置中的 `access_token` 保持一致（QwenPaw 监听回环地址时可不填，否则必填）
 
 ### 填写 agent.json
 
 ```json
 "onebot": {
   "enabled": true,
-  "ws_host": "0.0.0.0",
+  "ws_host": "127.0.0.1",
   "ws_port": 6199,
   "access_token": "",
   "share_session_in_group": false
@@ -531,26 +535,26 @@ NapCat  ──反向 WS──▶  QwenPaw (:6199/ws)
 
 **OneBot 专属字段说明：**
 
-| 字段                     | 类型   | 默认值    | 说明                                                          |
-| ------------------------ | ------ | --------- | ------------------------------------------------------------- |
-| `ws_host`                | string | `0.0.0.0` | WebSocket 服务器监听地址                                      |
-| `ws_port`                | int    | `6199`    | WebSocket 服务器监听端口                                      |
-| `access_token`           | string | `""`      | 可选的认证 Token（需与 NapCat 配置一致）                      |
-| `share_session_in_group` | bool   | `false`   | 为 `true` 时群成员共享一个会话；为 `false` 时每个成员独立会话 |
+| 字段                     | 类型   | 默认值      | 说明                                                            |
+| ------------------------ | ------ | ----------- | --------------------------------------------------------------- |
+| `ws_host`                | string | `127.0.0.1` | WebSocket 服务器监听地址。默认仅监听回环地址，端口不对网络开放  |
+| `ws_port`                | int    | `6199`      | WebSocket 服务器监听端口                                        |
+| `access_token`           | string | `""`        | OneBot 客户端携带的共享 Token。**`ws_host` 不是回环地址时必填** |
+| `media_base64`           | bool   | `false`     | 发送本地媒体前，将其编码为 Base64 后再交给 OneBot 客户端        |
+| `media_base64_max_mb`    | int    | `10`        | 出站媒体使用 Base64 编码的大小上限（MB）；超限时使用原始路径    |
+| `media_download_max_mb`  | int    | `50`        | 从 OneBot 客户端下载单个远程入站媒体文件的大小上限（MB）        |
+| `share_session_in_group` | bool   | `false`     | 为 `true` 时群成员共享一个会话；为 `false` 时每个成员独立会话   |
 
-> **Docker Compose 提示：** QwenPaw 和 NapCat 一起用 Docker Compose 部署时，NapCat 的反向 WS 地址填 `ws://qwenpaw:6199/ws`（使用服务名）。
+### 安全说明
 
-**多模态支持：**
+反向 WebSocket 服务接收 OneBot 事件，而这些事件会驱动 agent 执行。因此一个可从网络访问、又未开启鉴权的监听端口，等于允许任何人驱动你的 agent。
 
-| 类型 | 接收 | 发送 |
-| ---- | ---- | ---- |
-| 文本 | ✓    | ✓    |
-| 图片 | ✓    | ✓    |
-| 语音 | 🚧   | ✓    |
-| 视频 | 🚧   | ✓    |
-| 文件 | ✓    | ✓    |
+- **OneBot 实现与 QwenPaw 同机时，`ws_host` 保持 `127.0.0.1`**。这是默认值，无需设置 Token。
+- **`ws_host` 填写其他地址时，`access_token` 必填。** Token 为空期间，服务仍照常监听，但会以 `401` 拒绝所有连接并在日志中给出修正指引。
+- **Token 通过 `Authorization` 请求头传递**，这是 OneBot v11 反向 WebSocket 规范定义的方式：在 OneBot 客户端的 Token 字段配置即可，`Bearer <token>` 和 `Token <token>` 两种形式均可。将 Token 写在 URL query（`?access_token=...`）中的方式不被接受，因为 query 会被反向代理和容器的 access log 记录下来。
+- **优先使用内网或反向代理**，而不是直接把端口暴露到公网：`ws://` 是明文传输，在公网链路上传递的 Token 可被中途窃取。
 
-> **提示：** 语音和视频在渠道层已正确接收，但需要配置 QwenPaw 的转写服务（`transcription_provider_type`）才能让 LLM 理解内容。未配置时语音消息显示为占位符。
+> **Docker Compose 提示：** QwenPaw 和 NapCat 一起用 Docker Compose 部署时，两个容器不在同一个回环网口上，因此需将 `ws_host` 设为 `0.0.0.0` 并**同时设置 `access_token`**，NapCat 的反向 WS 地址填 `ws://qwenpaw:6199/ws`（使用服务名）。不要将 6199 端口 publish 到宿主机，或按 `127.0.0.1:6199:6199` 的形式 publish 以保持仅本机可访问。
 
 ---
 
@@ -1667,17 +1671,20 @@ https://xxxx.ngrok-free.app/api/messages
 
 所有频道都支持以下通用字段：
 
-| 字段                   | 类型     | 默认值   | 说明                                                    |
-| ---------------------- | -------- | -------- | ------------------------------------------------------- |
-| `enabled`              | bool     | `false`  | 是否启用该频道                                          |
-| `bot_prefix`           | string   | `""`     | 机器人回复前缀（如 `[BOT]`）                            |
-| `filter_tool_messages` | bool     | `false`  | 是否过滤工具调用/输出消息                               |
-| `filter_thinking`      | bool     | `false`  | 是否过滤思考/推理内容                                   |
-| `dm_policy`            | string   | `"open"` | 私聊访问策略：`"open"`（开放）/ `"allowlist"`（白名单） |
-| `group_policy`         | string   | `"open"` | 群聊访问策略：`"open"`（开放）/ `"allowlist"`（白名单） |
-| `allow_from`           | string[] | `[]`     | 白名单列表（当 policy 为 `"allowlist"` 时生效）         |
-| `deny_message`         | string   | `""`     | 拒绝访问时的提示消息                                    |
-| `require_mention`      | bool     | `false`  | 是否需要 @机器人 才响应                                 |
+| 字段                     | 类型     | 默认值   | 说明                                                    |
+| ------------------------ | -------- | -------- | ------------------------------------------------------- |
+| `enabled`                | bool     | `false`  | 是否启用该频道                                          |
+| `bot_prefix`             | string   | `""`     | 机器人回复前缀（如 `[BOT]`）                            |
+| `show_tool_calls`        | bool     | `true`   | 是否显示工具调用信息                                    |
+| `show_tool_results`      | bool     | `true`   | 是否显示工具结果文本；结果媒体始终发送                  |
+| `tool_call_max_length`   | int      | `200`    | 工具调用预览长度；`0` 表示不截断                        |
+| `tool_result_max_length` | int      | `500`    | 工具结果预览长度；`0` 表示不截断                        |
+| `show_thinking`          | bool     | `true`   | 是否显示思考/推理内容                                   |
+| `dm_policy`              | string   | `"open"` | 私聊访问策略：`"open"`（开放）/ `"allowlist"`（白名单） |
+| `group_policy`           | string   | `"open"` | 群聊访问策略：`"open"`（开放）/ `"allowlist"`（白名单） |
+| `allow_from`             | string[] | `[]`     | 白名单列表（当 policy 为 `"allowlist"` 时生效）         |
+| `deny_message`           | string   | `""`     | 拒绝访问时的提示消息                                    |
+| `require_mention`        | bool     | `false`  | 是否需要 @机器人 才响应                                 |
 
 ### 多模态消息支持
 
@@ -1692,6 +1699,7 @@ https://xxxx.ngrok-free.app/api/messages
 | Slack      | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        |
 | iMessage   | ✓        | ✗        | ✗        | ✗        | ✗        | ✓        | ✗        | ✗        | ✗        | ✗        |
 | QQ         | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        |
+| OneBot     | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        |
 | 企业微信   | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        |
 | 微信个人   | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        |
 | Telegram   | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        | ✓        |
@@ -1710,6 +1718,7 @@ https://xxxx.ngrok-free.app/api/messages
 - **Slack**：原生支持所有文件类型 — 图片、音频、视频、PDF 及任意文件。用户上传的文件会自动下载并作为多模态输入处理；发送侧通过 `files.uploadV2` 支持所有媒体类型。
 - **iMessage**：基于本地 imsg + 数据库轮询，仅支持文本收发；平台/实现限制，无法支持附件（✗）。
 - **QQ**：接收侧附件解析为多模态、发送侧真实媒体均为 🚧 施工中，当前仅文本 + 链接形式。
+- **OneBot**：接收图片、视频、音频和文件并下载到本地；发送时使用 OneBot 原生媒体消息段，本地出站媒体可选择编码为 Base64。
 - **Telegram**：接收时附件会解析为文件并传入，可在telegram对话界面以对应格式打开（图片 / 语音 / 视频 / 文件）
 - **企业微信**：WebSocket 长连接接收，markdown/template_card 发送；支持接收和发送文本、图片、语音、视频和文件。
 - **微信个人（iLink）**：HTTP 长轮询接收，支持文本、图片（AES-128-ECB 解密）、语音（ASR 转录文字）、文件和视频；发送支持文本、图片、文件和视频；音频文件（如 MP3）因 iLink API 限制暂不支持。
@@ -1763,20 +1772,32 @@ https://xxxx.ngrok-free.app/api/messages
 # my_channel.py
 from agentscope_runtime.engine.schemas.agent_schemas import TextContent, ContentType
 from qwenpaw.app.channels.base import BaseChannel
+from qwenpaw.app.channels.renderer import ChannelDisplayConfig
 from qwenpaw.app.channels.schema import ChannelType
 
 class MyChannel(BaseChannel):
     channel: ChannelType = "my_channel"
 
-    def __init__(self, process, enabled=True, bot_prefix="", **kwargs):
-        super().__init__(process, on_reply_sent=kwargs.get("on_reply_sent"))
+    def __init__(self, process, enabled=True, bot_prefix="",
+                 display_config=None, **kwargs):
+        super().__init__(
+            process,
+            on_reply_sent=kwargs.get("on_reply_sent"),
+            display_config=display_config,
+        )
         self.enabled = enabled
         self.bot_prefix = bot_prefix
 
     @classmethod
-    def from_config(cls, process, config, on_reply_sent=None, show_tool_details=True):
-        return cls(process=process, enabled=getattr(config, "enabled", True),
-                   bot_prefix=getattr(config, "bot_prefix", ""), on_reply_sent=on_reply_sent)
+    def from_config(cls, process, config, on_reply_sent=None,
+                    display_config=None, **kwargs):
+        return cls(
+            process=process,
+            enabled=getattr(config, "enabled", True),
+            bot_prefix=getattr(config, "bot_prefix", ""),
+            on_reply_sent=on_reply_sent,
+            display_config=display_config or ChannelDisplayConfig.from_config(config),
+        )
 
     @classmethod
     def from_env(cls, process, on_reply_sent=None):
@@ -1864,7 +1885,7 @@ def build_agent_request_from_native(self, native_payload):
 ### 通过插件添加自定义频道
 
 自定义频道现在通过**插件系统**注册。完整教程请参阅
-[插件系统 — 示例 8：注册自定义消息频道](./plugins)。
+[插件系统 — 示例 10：注册自定义消息频道](./plugins#示例-10注册自定义消息频道)。
 
 添加自定义频道的步骤：
 

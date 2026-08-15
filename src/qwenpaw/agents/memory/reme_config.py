@@ -7,7 +7,6 @@ ReMe as an in-process application, so it passes an equivalent configuration
 dict directly to ``reme.application.Application`` / ``reme.reme.ReMe``.
 """
 
-from copy import deepcopy
 from typing import Any
 
 from qwenpaw.config.config import AgentProfileConfig, EmbeddingModelConfig
@@ -18,6 +17,8 @@ _OPENAI_COMPAT_EMBEDDING_BACKENDS = {
     "dashscope",
     "dashscope_multimodal",
 }
+
+_MAX_FILE_BYTES = 10 * 1024 * 1024
 
 
 def build_reme_app_config(
@@ -45,7 +46,7 @@ def build_reme_app_config(
             "language": agent_config.language,
             "timezone": user_timezone or "Asia/Shanghai",
             "enable_logo": False,
-            "log_to_console": False,
+            "log_to_console": True,
         },
     )
 
@@ -65,6 +66,7 @@ def _base_config() -> dict[str, Any]:
         "jobs": {
             "index_update_loop": {
                 "backend": "background",
+                "max_file_bytes": _MAX_FILE_BYTES,
                 "watch_dirs": watch_dirs,
                 "watch_suffixes": watch_suffixes,
                 "steps": [
@@ -78,43 +80,6 @@ def _base_config() -> dict[str, Any]:
                         "backend": "watch_changes_step",
                         "dispatch_steps": [
                             {"backend": "update_index_step", "persist": False},
-                        ],
-                    },
-                ],
-            },
-            "resource_watch_loop": {
-                "backend": "background",
-                "watch_dirs": ["resource_dir"],
-                "watch_suffixes": [
-                    "md",
-                    "txt",
-                    "json",
-                    "jsonl",
-                    "csv",
-                    "yaml",
-                    "html",
-                ],
-                "steps": [
-                    {
-                        "backend": "init_changes_step",
-                        "monitor_type": "file_catalog",
-                        "monitor_name": "resource",
-                        "dispatch_steps": [
-                            {
-                                "backend": "update_catalog_step",
-                                "file_catalog": "resource",
-                            },
-                            {"backend": "auto_resource_step"},
-                        ],
-                    },
-                    {
-                        "backend": "watch_changes_step",
-                        "dispatch_steps": [
-                            {
-                                "backend": "update_catalog_step",
-                                "file_catalog": "resource",
-                            },
-                            {"backend": "auto_resource_step"},
                         ],
                     },
                 ],
@@ -134,8 +99,18 @@ def _base_config() -> dict[str, Any]:
                 "parameters": {"type": "object", "properties": {}},
                 "steps": [{"backend": "status_step"}],
             },
+            "graph_snapshot": {
+                "backend": "base",
+                "description": (
+                    "Return the complete indexed wikilink graph for frontend "
+                    "rendering."
+                ),
+                "parameters": {"type": "object", "properties": {}},
+                "steps": [{"backend": "graph_snapshot_step"}],
+            },
             "reindex": {
                 "backend": "base",
+                "max_file_bytes": _MAX_FILE_BYTES,
                 "description": (
                     "wipe the file store and rebuild it from the existing "
                     "files"
@@ -516,37 +491,67 @@ def _base_config() -> dict[str, Any]:
                 },
                 "steps": [{"backend": "auto_memory_step"}],
             },
-            "auto_resource": {
+            "daily_paper": {
                 "backend": "base",
                 "description": (
-                    "Auto-resource: interpret resource files into daily notes"
+                    "Build detailed readings and a five-minute brief from "
+                    "Hugging Face weekly/monthly papers."
                 ),
+                "candidate_limit": 20,
+                "rrf_k": 60,
+                "weekly_weight": 0.7,
+                "history_days": 30,
+                "hf_timeout": 600,
+                "hf_max_retries": 3,
+                "pdf_timeout": 600,
+                "max_pdf_bytes": 50 * 1024 * 1024,
+                "max_pdf_pages": 20,
+                "max_pdf_chars": 300000,
                 "parameters": {
                     "type": "object",
                     "properties": {
-                        "changes": {
-                            "type": "array",
+                        "date": {
+                            "type": "string",
                             "description": (
-                                "resource change batch, each item has "
-                                "path/file_path and change"
+                                "Run date in YYYY-MM-DD; empty means today."
                             ),
-                            "items": {
-                                "type": "object",
-                                "properties": {
-                                    "path": {"type": "string"},
-                                    "file_path": {"type": "string"},
-                                    "change": {
-                                        "type": "string",
-                                        "description": "added/"
-                                        "modified/deleted",
-                                    },
-                                },
-                            },
+                            "default": "",
+                        },
+                        "force": {
+                            "type": "boolean",
+                            "description": "Regenerate an existing brief.",
+                            "default": False,
+                        },
+                        "use_hf_mirror": {
+                            "type": "boolean",
+                            "description": (
+                                "Fetch paper data through the Hugging Face "
+                                "mirror site instead of the official one."
+                            ),
+                            "default": False,
+                        },
+                        "topics": {
+                            "type": "string",
+                            "description": "Topics to prioritize.",
+                            "default": "",
+                        },
+                        "weekly_weight": {
+                            "type": "number",
+                            "default": 0.7,
+                        },
+                        "history_days": {
+                            "type": "integer",
+                            "default": 30,
                         },
                     },
-                    "required": ["changes"],
                 },
-                "steps": [{"backend": "auto_resource_step"}],
+                "steps": [
+                    {"backend": "daily_paper_collect_step"},
+                    {"backend": "daily_paper_rank_step"},
+                    {"backend": "daily_paper_select_step"},
+                    {"backend": "daily_paper_analyze_step"},
+                    {"backend": "daily_paper_digest_step"},
+                ],
             },
         },
         "components": _base_components(),
@@ -573,6 +578,7 @@ def _base_components() -> dict[str, Any]:
             "default": {
                 "backend": "agentscope",
                 "as_llm": "default",
+                "builtin_tools": False,
                 "permission_mode": "bypass",
                 "react_config": {"max_iters": 30},
                 "context_config": {
@@ -586,7 +592,6 @@ def _base_components() -> dict[str, Any]:
         "file_graph": {"default": {"backend": "local"}},
         "file_catalog": {
             "default": {"backend": "local"},
-            "resource": {"backend": "local"},
             "digest": {"backend": "local"},
             "dream": {"backend": "local"},
         },
@@ -640,9 +645,13 @@ def _apply_embedding_config(
 ) -> None:
     """Map QwenPaw embedding config into ReMe component config."""
     components = cfg["components"]
-    embedding_store_name = (
-        "default" if _is_embedding_enabled(embedding_config) else ""
-    )
+    if not _is_embedding_enabled(embedding_config):
+        # Keep the explicit empty value: LocalFileStore otherwise defaults to
+        # looking up embedding_store:default even when the component is absent.
+        components["file_store"]["default"]["embedding_store"] = ""
+        components.pop("embedding_store", None)
+        components.pop("as_embedding", None)
+        return
 
     components["as_embedding"]["default"].update(
         {
@@ -652,6 +661,10 @@ def _apply_embedding_config(
             "credential": _embedding_credential(embedding_config),
         },
     )
+    if embedding_config.backend == "openai":
+        components["as_embedding"]["default"][
+            "pass_dimensions"
+        ] = embedding_config.use_dimensions
     components["embedding_store"]["default"].update(
         {
             "enable_cache": embedding_config.enable_cache,
@@ -660,9 +673,7 @@ def _apply_embedding_config(
             "max_batch_size": embedding_config.max_batch_size,
         },
     )
-    components["file_store"]["default"][
-        "embedding_store"
-    ] = embedding_store_name
+    components["file_store"]["default"]["embedding_store"] = "default"
 
 
 def _is_embedding_enabled(embedding_config: EmbeddingModelConfig) -> bool:
@@ -672,9 +683,7 @@ def _is_embedding_enabled(embedding_config: EmbeddingModelConfig) -> bool:
 
     # Keep enablement aligned with AgentScope credential requirements.
     backend = embedding_config.backend
-    if backend in _OPENAI_COMPAT_EMBEDDING_BACKENDS:
-        return bool(embedding_config.api_key.strip())
-    if backend == "gemini":
+    if backend in _OPENAI_COMPAT_EMBEDDING_BACKENDS | {"gemini"}:
         return bool(embedding_config.api_key.strip())
     if backend == "ollama":
         return True
@@ -706,11 +715,9 @@ def get_reme_app_config(
     agent_config: AgentProfileConfig,
     user_timezone: str | None = None,
 ) -> dict[str, Any]:
-    """Public wrapper returning a deep copy safe for caller mutation."""
-    return deepcopy(
-        build_reme_app_config(
-            working_dir=working_dir,
-            agent_config=agent_config,
-            user_timezone=user_timezone,
-        ),
+    """Return a fresh embedded ReMe application configuration."""
+    return build_reme_app_config(
+        working_dir=working_dir,
+        agent_config=agent_config,
+        user_timezone=user_timezone,
     )

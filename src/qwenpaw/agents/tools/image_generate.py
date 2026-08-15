@@ -218,6 +218,13 @@ async def _save_images(
 @tool_descriptor(
     requires_sandbox=("file_read", "file_write", "network"),
     async_execution=True,
+    tool_type="file",
+    target_param="image",
+    policy_name="ImageGenerate",
+    default_policy="allow",
+    policy_reason="Generate or edit images requested by the user",
+    ui_description="Generate or edit real images with GPT Image 2",
+    ui_icon="🎨",
     description=(
         "当用户要求创建、绘制、生成、渲染或编辑图片时，调用 image_generate。"
         "普通图片生成请求必须调用 image_generate。除非用户明确要求 SVG、"
